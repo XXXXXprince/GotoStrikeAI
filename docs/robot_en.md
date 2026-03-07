@@ -2,7 +2,7 @@
 
 [中文](robot.md)
 
-This document explains how to chat with CyberStrikeAI from **DingTalk** and **Lark (Feishu)** using long-lived connections—no need to open a browser on the server. Following the steps below helps avoid common mistakes.
+This document explains how to chat with CyberStrikeAI from **DingTalk**, **Lark (Feishu)**, and **WeCom (Enterprise WeChat)** using long-lived connections or HTTP callbacks—no need to open a browser on the server. Following the steps below helps avoid common mistakes.
 
 ---
 
@@ -19,12 +19,13 @@ Settings are written to the `robots` section of `config.yaml`; you can also edit
 
 ---
 
-## 2. Supported platforms (long-lived connection)
+## 2. Supported platforms (long-lived / callback)
 
-| Platform | Description |
-|----------|-------------|
-| DingTalk | Stream long-lived connection; the app connects to DingTalk to receive messages |
-| Lark (Feishu) | Long-lived connection; the app connects to Lark to receive messages |
+| Platform       | Description |
+|----------------|-------------|
+| DingTalk       | Stream long-lived connection; the app connects to DingTalk to receive messages |
+| Lark (Feishu)  | Long-lived connection; the app connects to Lark to receive messages |
+| WeCom (Qiye WX)| HTTP callback to receive messages; CyberStrikeAI replies via WeCom’s message sending API |
 
 Section 3 below describes, per platform, what to do in the developer console and which fields to copy into CyberStrikeAI.
 
@@ -97,6 +98,35 @@ If you only have a **custom bot** Webhook URL (`oapi.dingtalk.com/robot/send?acc
 | Verify Token | Optional; for event subscription |
 
 **Lark setup in short**: Log in to [Lark Open Platform](https://open.feishu.cn) → Create an enterprise app → In “Credentials and basic info” get **App ID** and **App Secret** → In “Application capabilities” enable **Robot** and the right permissions → Publish the app → Enter App ID and App Secret in CyberStrikeAI robot settings → Save and **restart** the app.
+
+---
+
+### 3.3 WeCom (Enterprise WeChat)
+
+> WeCom uses a **“HTTP callback + active message send API”** model:  
+> - User sends a message → WeCom sends an **encrypted XML callback** to your server (CyberStrikeAI’s `/api/robot/wecom`).  
+> - CyberStrikeAI decrypts it, calls the AI, then uses WeCom’s `message/send` API to **actively push the reply** to the user.
+
+**Configuration overview:**
+
+- In the WeCom admin console, create or select a **custom app** (自建应用).
+- In that app’s settings, configure the message **callback URL**, **Token**, and **EncodingAESKey**.
+- In CyberStrikeAI’s `config.yaml`, fill in:
+  - `robots.wecom.corp_id`: your CorpID (企业 ID)
+  - `robots.wecom.agent_id`: the app’s AgentId
+  - `robots.wecom.token`: the Token used for message callbacks
+  - `robots.wecom.encoding_aes_key`: the EncodingAESKey used for callbacks
+  - `robots.wecom.secret`: the app’s Secret (used when calling WeCom APIs to send messages)
+
+> **Important: IP allowlist (errcode 60020)**  
+> CyberStrikeAI calls `https://qyapi.weixin.qq.com/cgi-bin/message/send` to actively send AI replies.  
+> If logs show `errcode 60020 not allow to access from your ip`:
+>
+> - Your server’s outbound IP is **not in WeCom’s IP allowlist**.  
+> - In the WeCom admin console, open the custom app’s **Security / IP allowlist** settings (name may vary slightly), and add the public IP of the machine running CyberStrikeAI (e.g. `110.xxx.xxx.xxx`).  
+> - Save and wait for it to take effect, then test again.
+>
+> If the IP is not whitelisted, WeCom will reject active message sending. You will see that `/api/robot/wecom` receives and processes callbacks, but users **never see AI replies**, and logs contain `not allow to access from your ip`.
 
 ---
 

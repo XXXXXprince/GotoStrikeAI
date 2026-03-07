@@ -2,7 +2,7 @@
 
 [English](robot_en.md)
 
-本文档说明如何通过**钉钉**、**飞书**与 CyberStrikeAI 对话（长连接模式），在手机端即可使用，无需在服务器上打开网页。按下面步骤操作可避免常见弯路。
+本文档说明如何通过**钉钉**、**飞书**与 **企业微信** 与 CyberStrikeAI 对话（长连接 / 回调模式），在手机端即可使用，无需在服务器上打开网页。按下面步骤操作可避免常见弯路。
 
 ---
 
@@ -19,12 +19,13 @@
 
 ---
 
-## 二、支持的平台（长连接）
+## 二、支持的平台（长连接 / 回调）
 
-| 平台 | 说明 |
-|------|------|
-| 钉钉 | 使用 Stream 长连接，程序主动连接钉钉接收消息 |
-| 飞书 | 使用长连接，程序主动连接飞书接收消息 |
+| 平台     | 说明 |
+|----------|------|
+| 钉钉     | 使用 Stream 长连接，程序主动连接钉钉接收消息 |
+| 飞书     | 使用长连接，程序主动连接飞书接收消息 |
+| 企业微信 | 使用 HTTP 回调接收消息，被动回包 + 主动调用企业微信发送消息 API |
 
 下面第三节会按平台写清：在开放平台要做什么、要复制哪些字段、填到 CyberStrikeAI 的哪一栏。
 
@@ -98,6 +99,37 @@
 | Verify Token | 事件订阅用（可选） |
 
 **飞书配置简要步骤**：登录 [飞书开放平台](https://open.feishu.cn) → 创建企业自建应用 → 在「凭证与基础信息」中获取 **App ID**、**App Secret** → 在「应用能力」中开通**机器人**并启用相应权限 → 发布应用 → 将 App ID、App Secret 填到 CyberStrikeAI 机器人设置 → 保存并**重启应用**。
+
+---
+
+### 3.3 企业微信 (WeCom)
+
+> 企业微信目前采用「HTTP 回调 + 主动发送消息 API」的方式工作：  
+> - 用户发消息 → 企业微信以加密 XML **回调到你的服务器**（本程序的 `/api/robot/wecom`）；  
+> - CyberStrikeAI 解密并调用 AI → 使用企业微信的 `message/send` 接口**主动发消息给用户**。
+
+**配置概览：**
+
+- 在企业微信管理后台创建或选择一个**自建应用**。
+- 在该应用的「接收消息」处配置回调 URL、Token、EncodingAESKey。
+- 在 CyberStrikeAI 的 `config.yaml` 中填入：
+  - `robots.wecom.corp_id`：企业 ID（CorpID）
+  - `robots.wecom.agent_id`：应用的 AgentId
+  - `robots.wecom.token`：消息回调使用的 Token
+  - `robots.wecom.encoding_aes_key`：消息回调使用的 EncodingAESKey
+  - `robots.wecom.secret`：该应用的 Secret（用于调用企业微信主动发送消息接口）
+
+> **重要：IP 白名单（errcode 60020）**  
+> CyberStrikeAI 使用 `https://qyapi.weixin.qq.com/cgi-bin/message/send` 主动发送 AI 回复。  
+> 若企业微信日志或本程序日志中出现 `errcode 60020 not allow to access from your ip`：
+>
+> - 说明你的服务器出口 IP **没有加入企业微信的 IP 白名单**；  
+> - 请在企业微信管理后台中找到该自建应用的**「安全设置 / IP 白名单」**（具体入口可能因版本略有不同），将运行 CyberStrikeAI 的服务器公网 IP（如 `110.xxx.xxx.xxx`）加入白名单；  
+> - 保存后等待生效，再次发送消息测试。
+>
+> 如果 IP 未加入白名单，企业微信会拒绝主动发送消息，表现为：  
+> - 回调接口 `/api/robot/wecom` 能正常收到并处理消息；  
+> - 但手机端**始终收不到 AI 回复**，日志中有 `not allow to access from your ip` 提示。
 
 ---
 
