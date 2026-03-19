@@ -69,9 +69,11 @@ http_get() {
   if have_cmd curl; then
     # If GITHUB_TOKEN is provided, use it for api.github.com to avoid low rate limits.
     if [[ -n "${GITHUB_TOKEN:-}" && "$1" == https://api.github.com/* ]]; then
-      curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" "$1"
+      # Do not use `-f` so we can parse GitHub error JSON bodies and show `message`.
+      curl -sSL -H "Authorization: Bearer ${GITHUB_TOKEN}" "$1"
     else
-      curl -fsSL "$1"
+      # Do not use `-f` so we can parse GitHub error JSON bodies and show `message`.
+      curl -sSL "$1"
     fi
   elif have_cmd wget; then
     wget -qO- "$1"
@@ -208,11 +210,33 @@ PY
   if [[ -z "$TAG" ]]; then
     local msg
     msg="$(printf '%s' "$json" | python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '{}'); print(d.get('message',''))" 2>/dev/null || true)"
+
+    # Fallback: try query releases list (sometimes latest endpoint returns error JSON without tag_name).
+    local fallback_url="https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=1"
+    info "Fallback to: ${fallback_url}"
+    local fallback_json
+    fallback_json="$(http_get "$fallback_url" 2>/dev/null || true)"
+    local fallback_tag
+    fallback_tag="$(printf '%s' "$fallback_json" | python3 -c "import sys,json; d=json.loads(sys.stdin.read() or '[]'); print(d[0].get('tag_name','') if isinstance(d,list) and d else '')" 2>/dev/null || true)"
+
+    if [[ -n "$fallback_tag" ]]; then
+      TAG="$fallback_tag"
+      info "Latest Release tag (fallback): $TAG"
+      return 0
+    fi
+
+    local snippet
+    snippet="$(printf '%s' "$json" | python3 -c "import sys; s=sys.stdin.read(); print(s[:300].replace('\\n',' '))" 2>/dev/null || true)"
+
     if [[ -n "$msg" ]]; then
       err "Failed to fetch latest tag: ${msg}"
     else
-      err "Failed to fetch latest tag. Please try using --tag to specify the version."
+      err "Failed to fetch latest tag."
     fi
+    if [[ -n "$snippet" ]]; then
+      err "API response snippet: ${snippet}"
+    fi
+    err "Please try using --tag to specify the version, or set export GITHUB_TOKEN=\"...\"."
     exit 1
   fi
   info "Latest Release tag: $TAG"
