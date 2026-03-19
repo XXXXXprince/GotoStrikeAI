@@ -8572,6 +8572,28 @@ header {
     flex-shrink: 0;
 }
 
+.webshell-conn-search {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.4);
+    flex-shrink: 0;
+}
+
+.webshell-conn-search-input {
+    width: 100%;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    font-size: 0.9rem;
+    background: var(--bg-secondary);
+}
+
+.webshell-conn-search-input:focus {
+    outline: none;
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 2px rgba(0, 102, 255, 0.12);
+}
+
 .webshell-sidebar-header::before {
     content: '';
     display: inline-block;
@@ -9241,16 +9263,26 @@ header {
     margin-top: 8px;
     margin-bottom: 8px;
 }
+.webshell-ai-process-block.process-details-container {
+    /* 让“渗透测试详情”视觉上跟随助手气泡宽度，而不是强行 100% 宽 */
+    width: auto;
+    max-width: 80%;
+    align-self: flex-start;
+    /* 覆盖通用 .process-details-container 的边框/内边距，避免重复一层“边框卡片” */
+    border-top: none;
+    padding-top: 0;
+    margin-top: 10px;
+}
 .webshell-ai-process-toggle {
     display: block;
     width: 100%;
-    padding: 8px 12px;
+    padding: 10px 14px;
     text-align: left;
     font-size: 0.9rem;
     color: var(--text-secondary);
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: 10px;
     cursor: pointer;
 }
 .webshell-ai-process-toggle:hover {
@@ -9262,9 +9294,42 @@ header {
     overflow: hidden;
     transition: max-height 0.3s ease;
 }
+.webshell-ai-process-block .process-details-content .progress-timeline {
+    /* 避免与外层卡片重复背景/边框 */
+    background: transparent;
+    border: none;
+    padding: 0;
+    width: 100%;
+    margin-top: 10px;
+    gap: 0;
+}
+.webshell-ai-process-block .webshell-ai-timeline {
+    background: transparent;
+    border: none;
+    padding: 0;
+    border-radius: 0;
+    margin-bottom: 0;
+    width: 100%;
+}
 .webshell-ai-process-block .process-details-content .progress-timeline.expanded {
     max-height: 2000px;
     overflow-y: auto;
+}
+
+/* 展开后才把宽度撑满；未展开时保持折叠按钮“缩回去”的视觉 */
+.webshell-ai-process-block.process-details-container:has(.progress-timeline.expanded) {
+    width: 100%;
+    max-width: 80%;
+    align-self: flex-start;
+}
+.webshell-ai-process-block.process-details-container:has(.progress-timeline.expanded) .webshell-ai-process-toggle {
+    width: 100%;
+}
+.webshell-ai-process-block.process-details-container:has(.progress-timeline.expanded) .process-details-content .progress-timeline {
+    width: 100%;
+}
+.webshell-ai-process-block.process-details-container:has(.progress-timeline.expanded) .webshell-ai-timeline {
+    width: 100%;
 }
 .webshell-ai-old-conv {
     width: 100%;
@@ -9294,6 +9359,37 @@ header {
     display: flex;
     flex-direction: column;
     gap: 12px;
+}
+
+/* 让 timeline item 更“像条目”而不是松散的分隔块 */
+.webshell-ai-process-block .webshell-ai-timeline-item {
+    border-left: 3px solid transparent;
+    padding: 10px 0 10px 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+.webshell-ai-process-block .webshell-ai-timeline-item:last-child {
+    border-bottom: none;
+}
+.webshell-ai-process-block .webshell-ai-timeline-msg {
+    /* 避免每条详情都出现内层滚动条（体验会显得很“碎”） */
+    max-height: none;
+    overflow-y: visible;
+}
+.webshell-ai-process-block .webshell-ai-timeline-iteration {
+    border-left-color: var(--accent-color);
+}
+.webshell-ai-process-block .webshell-ai-timeline-thinking {
+    border-left-color: #9c27b0;
+}
+.webshell-ai-process-block .webshell-ai-timeline-tool_call,
+.webshell-ai-process-block .webshell-ai-timeline-tool_calls_detected {
+    border-left-color: #ff9800;
+}
+.webshell-ai-process-block .webshell-ai-timeline-tool_result {
+    border-left-color: var(--success-color);
+}
+.webshell-ai-process-block .webshell-ai-timeline-error {
+    border-left-color: var(--error-color);
 }
 .webshell-ai-messages {
     flex: 1;

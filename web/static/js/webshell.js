@@ -99,6 +99,8 @@ function wsT(key) {
         'webshell.refresh': '刷新',
         'webshell.selectAll': '全选',
         'webshell.breadcrumbHome': '根',
+        'webshell.searchPlaceholder': '搜索连接...',
+        'webshell.noMatchConnections': '暂无匹配连接',
         'common.delete': '删除',
         'common.refresh': '刷新'
     };
@@ -137,6 +139,16 @@ function initWebshellPage() {
     renderWebshellList();
     applyWebshellSidebarWidth();
     initWebshellSidebarResize();
+
+    // 连接搜索：实时过滤连接列表
+    var searchEl = document.getElementById('webshell-conn-search');
+    if (searchEl && searchEl.dataset.bound !== '1') {
+        searchEl.dataset.bound = '1';
+        searchEl.addEventListener('input', function () {
+            renderWebshellList();
+        });
+    }
+
     const workspace = document.getElementById('webshell-workspace');
     if (workspace) {
         workspace.innerHTML = '<div class="webshell-workspace-placeholder" data-i18n="webshell.selectOrAdd">' + (wsT('webshell.selectOrAdd')) + '</div>';
@@ -227,12 +239,29 @@ function renderWebshellList() {
     const listEl = document.getElementById('webshell-list');
     if (!listEl) return;
 
+    const searchEl = document.getElementById('webshell-conn-search');
+    const searchTerm = (searchEl && typeof searchEl.value === 'string' ? searchEl.value : '').trim().toLowerCase();
+
     if (!webshellConnections.length) {
         listEl.innerHTML = '<div class="webshell-empty" data-i18n="webshell.noConnections">' + (wsT('webshell.noConnections')) + '</div>';
         return;
     }
 
-    listEl.innerHTML = webshellConnections.map(conn => {
+    const filtered = searchTerm
+        ? webshellConnections.filter(conn => {
+            const id = String(conn.id || '').toLowerCase();
+            const url = String(conn.url || '').toLowerCase();
+            const remark = String(conn.remark || '').toLowerCase();
+            return id.includes(searchTerm) || url.includes(searchTerm) || remark.includes(searchTerm);
+        })
+        : webshellConnections;
+
+    if (filtered.length === 0) {
+        listEl.innerHTML = '<div class="webshell-empty">' + (wsT('webshell.noMatchConnections') || '暂无匹配连接') + '</div>';
+        return;
+    }
+
+    listEl.innerHTML = filtered.map(conn => {
         const remark = (conn.remark || conn.url || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const url = (conn.url || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const urlTitle = (conn.url || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
@@ -1686,6 +1715,14 @@ function refreshWebshellUIOnLanguageChange() {
             var fileListEl = document.getElementById('webshell-file-list');
             if (fileListEl && webshellCurrentConn && pathInput) {
                 webshellFileListDir(webshellCurrentConn, pathInput.value.trim() || '.');
+            }
+
+            // 连接搜索占位符（动态属性：这里手动更新）
+            var connSearchEl = document.getElementById('webshell-conn-search');
+            if (connSearchEl) {
+                var ph = wsT('webshell.searchPlaceholder') || '搜索连接...';
+                connSearchEl.setAttribute('placeholder', ph);
+                connSearchEl.placeholder = ph;
             }
         }
     }

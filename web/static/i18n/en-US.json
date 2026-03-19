@@ -393,6 +393,8 @@
     "batchDownload": "Batch download",
     "refresh": "Refresh",
     "selectAll": "Select all",
+    "searchPlaceholder": "Search connections...",
+    "noMatchConnections": "No matching connections",
     "breadcrumbHome": "Root"
   },
   "mcp": {

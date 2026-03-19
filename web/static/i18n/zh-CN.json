@@ -393,6 +393,8 @@
     "batchDownload": "批量下载",
     "refresh": "刷新",
     "selectAll": "全选",
+    "searchPlaceholder": "搜索连接...",
+    "noMatchConnections": "暂无匹配连接",
     "breadcrumbHome": "根"
   },
   "mcp": {
