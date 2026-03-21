@@ -489,9 +489,13 @@
     "title": "System settings",
     "nav": {
       "basic": "Basic",
+      "knowledge": "Knowledge base",
       "robots": "Bots",
       "terminal": "Terminal",
       "security": "Security"
+    },
+    "knowledge": {
+      "title": "Knowledge base"
     },
     "robots": {
       "title": "Bot settings",

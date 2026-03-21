@@ -489,9 +489,13 @@
     "title": "系统设置",
     "nav": {
       "basic": "基本设置",
+      "knowledge": "知识库",
       "robots": "机器人设置",
       "terminal": "终端",
       "security": "安全设置"
+    },
+    "knowledge": {
+      "title": "知识库设置"
     },
     "robots": {
       "title": "机器人设置",
