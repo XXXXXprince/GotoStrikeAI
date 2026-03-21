@@ -13,6 +13,98 @@ let chatFilesBrowsePath = [];
 /** 非空时，下一次上传文件落到此相对路径（chat_uploads 下目录），如 2026-03-21/uuid/sub */
 let chatFilesPendingUploadDir = '';
 
+/** 仅前端记录的「空目录」键 parentPath（'' 表示 chat_uploads 根）-> 子目录名列表，与树合并以便 mkdir 后可见 */
+const CHAT_FILES_SYNTHETIC_DIRS_KEY = 'csai_chat_files_synthetic_dirs';
+let chatFilesSyntheticEmptyDirs = {};
+
+function chatFilesLoadSyntheticDirsFromStorage() {
+    try {
+        const raw = localStorage.getItem(CHAT_FILES_SYNTHETIC_DIRS_KEY);
+        if (!raw) return;
+        const o = JSON.parse(raw);
+        if (o && typeof o === 'object') {
+            chatFilesSyntheticEmptyDirs = o;
+        }
+    } catch (e) {
+        chatFilesSyntheticEmptyDirs = {};
+    }
+}
+
+function chatFilesRegisterSyntheticEmptyDir(parentSegments, name) {
+    const p = parentSegments.join('/');
+    if (!chatFilesSyntheticEmptyDirs[p]) {
+        chatFilesSyntheticEmptyDirs[p] = [];
+    }
+    const arr = chatFilesSyntheticEmptyDirs[p];
+    if (arr.indexOf(name) === -1) {
+        arr.push(name);
+    }
+    try {
+        localStorage.setItem(CHAT_FILES_SYNTHETIC_DIRS_KEY, JSON.stringify(chatFilesSyntheticEmptyDirs));
+    } catch (e) {
+        /* ignore */
+    }
+}
+
+function chatFilesRemoveSyntheticDirSubtree(relPathUnderRoot) {
+    const rel = String(relPathUnderRoot || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+    if (!rel) return;
+    const parts = rel.split('/').filter(function (x) {
+        return x.length > 0;
+    });
+    if (parts.length === 0) return;
+    const leaf = parts[parts.length - 1];
+    const parentKey = parts.slice(0, -1).join('/');
+    const arr = chatFilesSyntheticEmptyDirs[parentKey];
+    if (arr) {
+        const ix = arr.indexOf(leaf);
+        if (ix >= 0) arr.splice(ix, 1);
+        if (arr.length === 0) delete chatFilesSyntheticEmptyDirs[parentKey];
+    }
+    const prefix = rel + '/';
+    let k;
+    for (k in chatFilesSyntheticEmptyDirs) {
+        if (!Object.prototype.hasOwnProperty.call(chatFilesSyntheticEmptyDirs, k)) continue;
+        if (k === rel || k.indexOf(prefix) === 0) {
+            delete chatFilesSyntheticEmptyDirs[k];
+        }
+    }
+    try {
+        localStorage.setItem(CHAT_FILES_SYNTHETIC_DIRS_KEY, JSON.stringify(chatFilesSyntheticEmptyDirs));
+    } catch (e) {
+        /* ignore */
+    }
+}
+
+function chatFilesMergeSyntheticDirsIntoTree(root) {
+    function ensurePath(node, segments) {
+        let n = node;
+        let i;
+        for (i = 0; i < segments.length; i++) {
+            const s = segments[i];
+            if (!n.dirs[s]) n.dirs[s] = chatFilesTreeMakeNode();
+            n = n.dirs[s];
+        }
+        return n;
+    }
+    let k;
+    for (k in chatFilesSyntheticEmptyDirs) {
+        if (!Object.prototype.hasOwnProperty.call(chatFilesSyntheticEmptyDirs, k)) continue;
+        const names = chatFilesSyntheticEmptyDirs[k];
+        if (!Array.isArray(names)) continue;
+        const segs = k ? k.split('/').filter(function (x) {
+            return x.length > 0;
+        }) : [];
+        const node = ensurePath(root, segs);
+        let ni;
+        for (ni = 0; ni < names.length; ni++) {
+            const nm = names[ni];
+            if (!nm || typeof nm !== 'string') continue;
+            if (!node.dirs[nm]) node.dirs[nm] = chatFilesTreeMakeNode();
+        }
+    }
+}
+
 function chatFilesLoadBrowsePathFromStorage() {
     try {
         const raw = localStorage.getItem(CHAT_FILES_BROWSE_PATH_KEY);
@@ -63,6 +155,7 @@ function chatFilesNormalizeBrowsePathForTree(root) {
 
 function initChatFilesPage() {
     chatFilesLoadBrowsePathFromStorage();
+    chatFilesLoadSyntheticDirsFromStorage();
     ensureChatFilesDocClickClose();
     const sel = document.getElementById('chat-files-group-by');
     if (sel) {
@@ -368,6 +461,12 @@ function chatFilesBuildTree(files) {
     return root;
 }
 
+function chatFilesTreeRootMerged() {
+    const root = chatFilesBuildTree(chatFilesDisplayed);
+    chatFilesMergeSyntheticDirsIntoTree(root);
+    return root;
+}
+
 function chatFilesTreeNodeMaxMod(node) {
     let m = 0;
     let i;
@@ -570,7 +669,7 @@ function renderChatFilesTable() {
     let innerHtml;
 
     if (groupMode === 'folder') {
-        const root = chatFilesBuildTree(chatFilesDisplayed);
+        const root = chatFilesTreeRootMerged();
         chatFilesNormalizeBrowsePathForTree(root);
         const node = chatFilesResolveTreeNode(root, chatFilesBrowsePath);
         const current = node || root;
@@ -582,6 +681,7 @@ function renderChatFilesTable() {
 
         const tRoot = escapeHtml((typeof window.t === 'function') ? window.t('chatFilesPage.browseRoot') : 'chat_uploads');
         const tUp = escapeHtml((typeof window.t === 'function') ? window.t('chatFilesPage.browseUp') : '上级');
+        const tMkdir = escapeHtml((typeof window.t === 'function') ? window.t('chatFilesPage.newFolderButton') : '新建文件夹');
         const tEmpty = escapeHtml((typeof window.t === 'function') ? window.t('chatFilesPage.folderEmpty') : '此文件夹为空');
         const tCopyFolder = escapeHtml((typeof window.t === 'function') ? window.t('chatFilesPage.copyFolderPathTitle') : '复制 chat_uploads 下相对路径');
         const tEnter = escapeHtml((typeof window.t === 'function') ? window.t('chatFilesPage.enterFolderTitle') : '进入');
@@ -603,6 +703,7 @@ function renderChatFilesTable() {
 
         const upDisabled = chatFilesBrowsePath.length === 0 ? ' disabled' : '';
         const toolbarHtml = '<div class="chat-files-browse-toolbar">' + breadcrumbHtml +
+            '<button type="button" class="btn-secondary chat-files-mkdir-btn" onclick="openChatFilesMkdirModal()">' + tMkdir + '</button>' +
             '<button type="button" class="btn-secondary chat-files-browse-up"' + upDisabled + ' onclick="chatFilesNavigateUp()">' + tUp + '</button></div>';
 
         const svgTrash = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
@@ -735,7 +836,7 @@ function renderChatFilesTable() {
 window.chatFilesGroupByChange = chatFilesGroupByChange;
 
 function chatFilesNavigateInto(name) {
-    const root = chatFilesBuildTree(chatFilesDisplayed);
+    const root = chatFilesTreeRootMerged();
     chatFilesNormalizeBrowsePathForTree(root);
     const next = chatFilesBrowsePath.concat([name]);
     if (!chatFilesResolveTreeNode(root, next)) return;
@@ -744,7 +845,7 @@ function chatFilesNavigateInto(name) {
 }
 
 function chatFilesNavigateBreadcrumb(level) {
-    const root = chatFilesBuildTree(chatFilesDisplayed);
+    const root = chatFilesTreeRootMerged();
     chatFilesNormalizeBrowsePathForTree(root);
     if (level < 0) {
         chatFilesSetBrowsePath([]);
@@ -805,6 +906,7 @@ async function deleteChatFolderFromBrowse(folderName) {
         if (!res.ok) {
             throw new Error(await res.text());
         }
+        chatFilesRemoveSyntheticDirSubtree(rel);
         loadChatFilesPage();
     } catch (e) {
         alert((e && e.message) ? e.message : String(e));
@@ -842,6 +944,9 @@ window.chatFilesCopyFolderPathFromBtn = chatFilesCopyFolderPathFromBtn;
 window.chatFilesDeleteFolderFromBtn = chatFilesDeleteFolderFromBtn;
 window.chatFilesOpenUploadPicker = chatFilesOpenUploadPicker;
 window.chatFilesUploadToFolderClick = chatFilesUploadToFolderClick;
+window.openChatFilesMkdirModal = openChatFilesMkdirModal;
+window.closeChatFilesMkdirModal = closeChatFilesMkdirModal;
+window.submitChatFilesMkdir = submitChatFilesMkdir;
 
 function openChatFilesConversationIdx(idx) {
     const f = chatFilesDisplayed[idx];
@@ -1018,8 +1123,86 @@ async function submitChatFilesRename() {
     }
 }
 
+function openChatFilesMkdirModal() {
+    if (chatFilesGetGroupByMode() !== 'folder') return;
+    const hint = document.getElementById('chat-files-mkdir-parent-hint');
+    const input = document.getElementById('chat-files-mkdir-input');
+    const modal = document.getElementById('chat-files-mkdir-modal');
+    const p = chatFilesBrowsePath.join('/');
+    if (hint) hint.textContent = p ? ('chat_uploads/' + p) : 'chat_uploads';
+    if (input) input.value = '';
+    if (modal) modal.style.display = 'block';
+    if (modal && typeof window.applyTranslations === 'function') {
+        window.applyTranslations(modal);
+    }
+    setTimeout(() => {
+        if (input) input.focus();
+    }, 100);
+}
+
+function closeChatFilesMkdirModal() {
+    const modal = document.getElementById('chat-files-mkdir-modal');
+    if (modal) modal.style.display = 'none';
+    const input = document.getElementById('chat-files-mkdir-input');
+    if (input) input.value = '';
+}
+
+async function submitChatFilesMkdir() {
+    const input = document.getElementById('chat-files-mkdir-input');
+    const name = input ? String(input.value).trim() : '';
+    if (!name) {
+        closeChatFilesMkdirModal();
+        return;
+    }
+    if (name.includes('/') || name.includes('\\') || name === '.' || name === '..') {
+        const msg = (typeof window.t === 'function')
+            ? window.t('chatFilesPage.mkdirInvalidName')
+            : '名称无效';
+        alert(msg);
+        return;
+    }
+    const parent = chatFilesBrowsePath.join('/');
+    try {
+        const res = await apiFetch('/api/chat-uploads/mkdir', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ parent: parent, name: name })
+        });
+        if (!res.ok) {
+            let errText = '';
+            try {
+                const j = await res.json();
+                errText = j.error || JSON.stringify(j);
+            } catch (e2) {
+                errText = await res.text();
+            }
+            if (res.status === 409) {
+                const msg = (typeof window.t === 'function')
+                    ? window.t('chatFilesPage.mkdirExists')
+                    : errText;
+                alert(msg);
+                return;
+            }
+            throw new Error(errText || String(res.status));
+        }
+        chatFilesRegisterSyntheticEmptyDir(chatFilesBrowsePath.slice(), name);
+        closeChatFilesMkdirModal();
+        loadChatFilesPage();
+        const okMsg = (typeof window.t === 'function')
+            ? window.t('chatFilesPage.mkdirOk')
+            : '文件夹已创建';
+        chatFilesShowToast(okMsg);
+    } catch (e) {
+        alert((e && e.message) ? e.message : String(e));
+    }
+}
+
 function chatFilesOpenUploadPicker() {
-    chatFilesPendingUploadDir = '';
+    if (chatFilesGetGroupByMode() === 'folder') {
+        chatFilesPendingUploadDir = chatFilesBrowsePath.join('/');
+    } else {
+        chatFilesPendingUploadDir = '';
+    }
     const inp = document.getElementById('chat-files-upload-input');
     if (inp) inp.click();
 }

@@ -13330,6 +13330,86 @@ button.chat-files-dropdown-item:hover:not(:disabled) {
     width: 100%;
 }
 
+/* 新建文件夹弹窗：层次清晰、留白舒适，无强装饰 */
+.chat-files-mkdir-modal-content {
+    max-width: 480px;
+}
+
+.chat-files-mkdir-body {
+    padding: 26px 28px 28px;
+}
+
+.chat-files-mkdir-location {
+    margin: 0 0 22px;
+}
+
+.chat-files-mkdir-location-caption {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    letter-spacing: 0.01em;
+}
+
+.chat-files-mkdir-path-box {
+    padding: 11px 14px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+
+.chat-files-mkdir-path {
+    display: block;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.8125rem;
+    line-height: 1.55;
+    color: var(--text-primary);
+    word-break: break-all;
+    background: transparent;
+    border: none;
+}
+
+.chat-files-mkdir-label {
+    gap: 10px;
+}
+
+.chat-files-mkdir-field-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.chat-files-mkdir-field-icon {
+    flex-shrink: 0;
+    color: var(--text-secondary);
+    opacity: 0.9;
+}
+
+.chat-files-mkdir-input {
+    min-height: 40px;
+    padding: 9px 12px;
+    font-size: 0.875rem;
+    border-radius: 8px;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.chat-files-mkdir-input:focus {
+    outline: none;
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 2px rgba(0, 102, 255, 0.14);
+}
+
+.chat-files-mkdir-footer {
+    padding: 18px 28px 22px;
+    gap: 12px;
+}
+
 .chat-files-toast {
     position: fixed;
     z-index: 1100;

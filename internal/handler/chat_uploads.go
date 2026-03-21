@@ -205,6 +205,77 @@ func (h *ChatUploadsHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+type chatUploadMkdirBody struct {
+	Parent string `json:"parent"`
+	Name   string `json:"name"`
+}
+
+// Mkdir POST /api/chat-uploads/mkdir — 在 parent 目录下新建子目录（parent 为 chat_uploads 下相对路径，空表示根目录；name 为单段目录名）
+func (h *ChatUploadsHandler) Mkdir(c *gin.Context) {
+	var body chatUploadMkdirBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" || strings.ContainsAny(name, `/\`) || name == "." || name == ".." {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid name"})
+		return
+	}
+	if utf8.RuneCountInString(name) > 200 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name too long"})
+		return
+	}
+
+	parent := strings.TrimSpace(body.Parent)
+	parent = filepath.ToSlash(filepath.Clean(filepath.FromSlash(parent)))
+	parent = strings.Trim(parent, "/")
+	if parent == "." {
+		parent = ""
+	}
+
+	root, err := h.absRoot()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if parent != "" {
+		absParent, err := h.resolveUnderChatUploads(parent)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		st, err := os.Stat(absParent)
+		if err != nil || !st.IsDir() {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "parent not found"})
+			return
+		}
+	}
+
+	var rel string
+	if parent == "" {
+		rel = name
+	} else {
+		rel = parent + "/" + name
+	}
+	absNew, err := h.resolveUnderChatUploads(rel)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if _, err := os.Stat(absNew); err == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "already exists"})
+		return
+	}
+	if err := os.Mkdir(absNew, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	relOut, _ := filepath.Rel(root, absNew)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "relativePath": filepath.ToSlash(relOut)})
+}
+
 type chatUploadRenameBody struct {
 	Path    string `json:"path"`
 	NewName string `json:"newName"`

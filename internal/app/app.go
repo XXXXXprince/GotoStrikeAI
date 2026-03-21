@@ -846,6 +846,7 @@ func setupRoutes(
 		protected.GET("/chat-uploads/download", chatUploadsHandler.Download)
 		protected.GET("/chat-uploads/content", chatUploadsHandler.GetContent)
 		protected.POST("/chat-uploads", chatUploadsHandler.Upload)
+		protected.POST("/chat-uploads/mkdir", chatUploadsHandler.Mkdir)
 		protected.DELETE("/chat-uploads", chatUploadsHandler.Delete)
 		protected.PUT("/chat-uploads/rename", chatUploadsHandler.Rename)
 		protected.PUT("/chat-uploads/content", chatUploadsHandler.PutContent)
