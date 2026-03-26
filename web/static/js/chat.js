@@ -4404,9 +4404,14 @@ async function showConversationContextMenu(event) {
         submenu.style.display = 'none';
         submenuVisible = false;
     }
+    const downloadSubmenu = document.getElementById('download-markdown-submenu');
+    if (downloadSubmenu) {
+        downloadSubmenu.style.display = 'none';
+    }
     // 清除所有定时器
     clearSubmenuHideTimeout();
     clearSubmenuShowTimeout();
+    clearDownloadMarkdownSubmenuHideTimeout();
     submenuLoading = false;
 
     const convId = contextMenuConversationId;
@@ -4537,26 +4542,44 @@ async function showConversationContextMenu(event) {
     menu.style.top = top + 'px';
     
     // 如果菜单在右侧，子菜单应该在左侧显示
-    if (submenu && left < event.clientX) {
-        submenu.style.left = 'auto';
-        submenu.style.right = '100%';
-        submenu.style.marginLeft = '0';
-        submenu.style.marginRight = '4px';
-    } else if (submenu) {
-        submenu.style.left = '100%';
-        submenu.style.right = 'auto';
-        submenu.style.marginLeft = '4px';
-        submenu.style.marginRight = '0';
+    if (left < event.clientX) {
+        if (submenu) {
+            submenu.style.left = 'auto';
+            submenu.style.right = '100%';
+            submenu.style.marginLeft = '0';
+            submenu.style.marginRight = '4px';
+        }
+        if (downloadSubmenu) {
+            downloadSubmenu.style.left = 'auto';
+            downloadSubmenu.style.right = '100%';
+            downloadSubmenu.style.marginLeft = '0';
+            downloadSubmenu.style.marginRight = '4px';
+        }
+    } else {
+        if (submenu) {
+            submenu.style.left = '100%';
+            submenu.style.right = 'auto';
+            submenu.style.marginLeft = '4px';
+            submenu.style.marginRight = '0';
+        }
+        if (downloadSubmenu) {
+            downloadSubmenu.style.left = '100%';
+            downloadSubmenu.style.right = 'auto';
+            downloadSubmenu.style.marginLeft = '4px';
+            downloadSubmenu.style.marginRight = '0';
+        }
     }
 
     // 点击外部关闭菜单
     const closeMenu = (e) => {
         // 检查点击是否在主菜单或子菜单内
         const moveToGroupSubmenuEl = document.getElementById('move-to-group-submenu');
+        const downloadMarkdownSubmenuEl = document.getElementById('download-markdown-submenu');
         const clickedInMenu = menu.contains(e.target);
         const clickedInSubmenu = moveToGroupSubmenuEl && moveToGroupSubmenuEl.contains(e.target);
+        const clickedInDownloadSubmenu = downloadMarkdownSubmenuEl && downloadMarkdownSubmenuEl.contains(e.target);
         
-        if (!clickedInMenu && !clickedInSubmenu) {
+        if (!clickedInMenu && !clickedInSubmenu && !clickedInDownloadSubmenu) {
             // 使用 closeContextMenu 确保同时关闭主菜单和子菜单
             closeContextMenu();
             document.removeEventListener('click', closeMenu);
@@ -4950,6 +4973,8 @@ let submenuShowTimeout = null;
 let submenuLoading = false;
 // 子菜单是否已显示
 let submenuVisible = false;
+// 下载Markdown子菜单隐藏定时器
+let downloadMarkdownSubmenuHideTimeout = null;
 
 // 隐藏移动到分组子菜单
 function hideMoveToGroupSubmenu() {
@@ -4974,6 +4999,45 @@ function clearSubmenuShowTimeout() {
         clearTimeout(submenuShowTimeout);
         submenuShowTimeout = null;
     }
+}
+
+function clearDownloadMarkdownSubmenuHideTimeout() {
+    if (downloadMarkdownSubmenuHideTimeout) {
+        clearTimeout(downloadMarkdownSubmenuHideTimeout);
+        downloadMarkdownSubmenuHideTimeout = null;
+    }
+}
+
+function showDownloadMarkdownSubmenu() {
+    const submenu = document.getElementById('download-markdown-submenu');
+    if (!submenu) return;
+    clearDownloadMarkdownSubmenuHideTimeout();
+    submenu.style.display = 'block';
+}
+
+function hideDownloadMarkdownSubmenu() {
+    const submenu = document.getElementById('download-markdown-submenu');
+    if (!submenu) return;
+    submenu.style.display = 'none';
+}
+
+function handleDownloadMarkdownSubmenuEnter() {
+    clearDownloadMarkdownSubmenuHideTimeout();
+    showDownloadMarkdownSubmenu();
+}
+
+function handleDownloadMarkdownSubmenuLeave(event) {
+    const submenu = document.getElementById('download-markdown-submenu');
+    if (!submenu) return;
+    const relatedTarget = event.relatedTarget;
+    if (relatedTarget && submenu.contains(relatedTarget)) {
+        return;
+    }
+    clearDownloadMarkdownSubmenuHideTimeout();
+    downloadMarkdownSubmenuHideTimeout = setTimeout(() => {
+        hideDownloadMarkdownSubmenu();
+        downloadMarkdownSubmenuHideTimeout = null;
+    }, 200);
 }
 
 // 处理鼠标进入"移动到分组"菜单项（带防抖）
@@ -5178,6 +5242,146 @@ function showAttackChainFromContext() {
     showAttackChain(convId);
 }
 
+function formatConversationDateForMarkdown(value) {
+    if (!value) return '';
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return '';
+    const locale = (typeof window.__locale === 'string' && window.__locale.startsWith('zh')) ? 'zh-CN' : 'en-US';
+    return d.toLocaleString(locale, {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    });
+}
+
+function getConversationRoleLabel(role) {
+    switch (role) {
+        case 'assistant':
+            return 'Assistant';
+        case 'user':
+            return 'User';
+        case 'system':
+            return 'System';
+        default:
+            return role || 'Unknown';
+    }
+}
+
+function formatConversationAsMarkdown(conversation, options = {}) {
+    const includeToolDetails = !!options.includeToolDetails;
+    const title = (conversation && conversation.title ? String(conversation.title) : '').trim() || 'Untitled Conversation';
+    const createdAt = formatConversationDateForMarkdown(conversation && conversation.createdAt);
+    const updatedAt = formatConversationDateForMarkdown(conversation && conversation.updatedAt);
+    const messages = Array.isArray(conversation && conversation.messages) ? conversation.messages : [];
+
+    let markdown = `# ${title}\n\n`;
+    markdown += `- Conversation ID: \`${conversation && conversation.id ? conversation.id : ''}\`\n`;
+    if (createdAt) markdown += `- Created At: ${createdAt}\n`;
+    if (updatedAt) markdown += `- Updated At: ${updatedAt}\n`;
+    markdown += `- Message Count: ${messages.length}\n\n`;
+    markdown += '---\n\n';
+
+    if (messages.length === 0) {
+        markdown += '_No messages in this conversation._\n';
+        return markdown;
+    }
+
+    messages.forEach((msg, index) => {
+        const role = getConversationRoleLabel(msg && msg.role);
+        const timestamp = formatConversationDateForMarkdown(msg && msg.createdAt);
+        const content = msg && typeof msg.content === 'string' ? msg.content : '';
+
+        markdown += `## ${index + 1}. ${role}`;
+        if (timestamp) markdown += ` (${timestamp})`;
+        markdown += '\n\n';
+        markdown += content ? `${content}\n\n` : '_[Empty message]_\n\n';
+
+        if (Array.isArray(msg && msg.processDetails) && msg.processDetails.length > 0) {
+            markdown += '### Process Details\n\n';
+            msg.processDetails.forEach((detail) => {
+                const detailTime = formatConversationDateForMarkdown(detail && detail.timestamp);
+                const eventType = detail && detail.eventType ? detail.eventType : 'event';
+                const detailMsg = detail && detail.message ? detail.message : '';
+                // Avoid "[label]:" pattern because some Markdown parsers treat it as link reference definition.
+                markdown += `- \`${eventType}\``;
+                if (detailTime) markdown += ` ${detailTime}`;
+                if (detailMsg) markdown += `: ${detailMsg}`;
+                markdown += '\n';
+
+                if (includeToolDetails && detail && detail.data && (eventType === 'tool_call' || eventType === 'tool_result')) {
+                    const pretty = JSON.stringify(detail.data, null, 2);
+                    markdown += '\n```json\n';
+                    markdown += pretty || '{}';
+                    markdown += '\n```\n';
+                }
+            });
+            markdown += '\n';
+        }
+
+        if (Array.isArray(msg && msg.mcpExecutionIds) && msg.mcpExecutionIds.length > 0) {
+            markdown += `- MCP Execution IDs: ${msg.mcpExecutionIds.join(', ')}\n\n`;
+        }
+
+        markdown += '---\n\n';
+    });
+
+    return markdown;
+}
+
+function buildConversationMarkdownFileName(conversation, options = {}) {
+    const includeToolDetails = !!options.includeToolDetails;
+    const title = (conversation && conversation.title ? String(conversation.title) : '').trim() || 'conversation';
+    const safeTitle = title
+        .replace(/[\\/:*?"<>|]/g, '_')
+        .replace(/\s+/g, '_')
+        .slice(0, 60) || 'conversation';
+    const idPart = (conversation && conversation.id ? String(conversation.id) : '').slice(0, 8) || 'export';
+    const modePart = includeToolDetails ? 'full' : 'summary';
+    return `${safeTitle}_${idPart}_${modePart}.md`;
+}
+
+// 从上下文菜单下载对话 Markdown
+async function downloadConversationMarkdownFromContext(includeToolDetails = false) {
+    const convId = contextMenuConversationId;
+    if (!convId) return;
+
+    try {
+        const response = await apiFetch(`/api/conversations/${convId}`);
+        let conversation = null;
+        try {
+            conversation = await response.json();
+        } catch (e) {
+            conversation = null;
+        }
+        if (!response.ok) {
+            const errorMsg = conversation && conversation.error ? conversation.error : 'unknown error';
+            throw new Error(errorMsg);
+        }
+
+        const markdown = formatConversationAsMarkdown(conversation || {}, { includeToolDetails });
+        const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = buildConversationMarkdownFileName(conversation || {}, { includeToolDetails });
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    } catch (error) {
+        console.error('下载对话 Markdown 失败:', error);
+        const failedLabel = typeof window.t === 'function' ? window.t('chat.downloadConversationFailed') : '下载失败';
+        const errMsg = error && error.message ? error.message : 'unknown error';
+        alert(failedLabel + ': ' + errMsg);
+    }
+
+    closeContextMenu();
+}
+
 // 从上下文菜单删除对话
 function deleteConversationFromContext() {
     const convId = contextMenuConversationId;
@@ -5201,9 +5405,14 @@ function closeContextMenu() {
         submenu.style.display = 'none';
         submenuVisible = false;
     }
+    const downloadSubmenu = document.getElementById('download-markdown-submenu');
+    if (downloadSubmenu) {
+        downloadSubmenu.style.display = 'none';
+    }
     // 清除所有定时器
     clearSubmenuHideTimeout();
     clearSubmenuShowTimeout();
+    clearDownloadMarkdownSubmenuHideTimeout();
     submenuLoading = false;
     contextMenuConversationId = null;
 }

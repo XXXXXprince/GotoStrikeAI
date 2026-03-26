@@ -138,6 +138,7 @@
     "deleteGroupConfirm": "确定要删除此分组吗？分组中的对话不会被删除，但会从分组中移除。",
     "deleteConversationConfirm": "确定要删除此对话吗？",
     "renameFailed": "重命名失败",
+    "downloadConversationFailed": "下载对话失败",
     "viewAttackChainSelectConv": "请选择一个对话以查看攻击链",
     "viewAttackChainCurrentConv": "查看当前对话的攻击链",
     "executeFailed": "执行失败",
@@ -1450,6 +1451,9 @@
   },
   "contextMenu": {
     "viewAttackChain": "查看攻击链",
+    "downloadMarkdown": "下载 Markdown",
+    "downloadMarkdownSummary": "简版",
+    "downloadMarkdownFull": "完整版",
     "rename": "重命名",
     "pinConversation": "置顶此对话",
     "unpinConversation": "取消置顶",

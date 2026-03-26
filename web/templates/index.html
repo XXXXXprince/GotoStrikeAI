@@ -2205,6 +2205,24 @@ version: 1.0.0<br>
             </svg>
             <span data-i18n="contextMenu.viewAttackChain">查看攻击链</span>
         </div>
+        <div class="context-menu-item context-menu-item-has-submenu" onmouseenter="handleDownloadMarkdownSubmenuEnter()" onmouseleave="handleDownloadMarkdownSubmenuLeave(event)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span data-i18n="contextMenu.downloadMarkdown">下载 Markdown</span>
+            <svg class="submenu-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M9 18l6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <div id="download-markdown-submenu" class="context-submenu" style="display: none;" onmouseenter="clearDownloadMarkdownSubmenuHideTimeout()" onmouseleave="hideDownloadMarkdownSubmenu()">
+                <div class="context-submenu-item" onclick="downloadConversationMarkdownFromContext(false)">
+                    <span data-i18n="contextMenu.downloadMarkdownSummary">简版</span>
+                </div>
+                <div class="context-submenu-item" onclick="downloadConversationMarkdownFromContext(true)">
+                    <span data-i18n="contextMenu.downloadMarkdownFull">完整版</span>
+                </div>
+            </div>
+        </div>
         <div class="context-menu-divider"></div>
         <div class="context-menu-item" onclick="renameConversation()">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">

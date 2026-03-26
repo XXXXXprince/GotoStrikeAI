@@ -138,6 +138,7 @@
     "deleteGroupConfirm": "Are you sure you want to delete this group? Conversations in the group will not be deleted, but will be removed from the group.",
     "deleteConversationConfirm": "Are you sure you want to delete this conversation?",
     "renameFailed": "Rename failed",
+    "downloadConversationFailed": "Failed to download conversation",
     "viewAttackChainSelectConv": "Please select a conversation to view attack chain",
     "viewAttackChainCurrentConv": "View attack chain of current conversation",
     "executeFailed": "Execution failed",
@@ -1450,6 +1451,9 @@
   },
   "contextMenu": {
     "viewAttackChain": "View attack chain",
+    "downloadMarkdown": "Download Markdown",
+    "downloadMarkdownSummary": "Summary",
+    "downloadMarkdownFull": "Full",
     "rename": "Rename",
     "pinConversation": "Pin conversation",
     "unpinConversation": "Unpin",
