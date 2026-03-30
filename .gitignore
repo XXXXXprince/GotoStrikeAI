@@ -1,3 +1,44 @@
-data/
+# Local runtime config / secrets
 config.yaml
-config.backup.yaml
+config.yaml.backup
+.env
+.env.*
+
+# Local databases and runtime state
+data/
+*.db
+*.db-shm
+*.db-wal
+tmp/
+logs/
+*.log
+*.pid
+reports/
+.docker/docker.env
+.docker/docker-compose.override.yml
+*_ips.txt
+
+# Local build outputs
+cyberstrike-ai
+CyberStrikeAI
+dist/
+build/
+.gocache/
+
+# Local Python environment
+venv/
+.venv/
+__pycache__/
+scripts/__pycache__/
+
+# Scan results / test output
+nmap_*.txt
+*.nmap
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.~lock.*#
+*.swp
+*.swo
+*~
