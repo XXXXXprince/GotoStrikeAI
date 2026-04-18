@@ -5,26 +5,28 @@
 ## 总体结论
 
 - **改造已可用于生产试验**：流式对话、MCP 工具桥接、配置开关、前端模式切换均已落地。
-- **入口策略**：主聊天与 WebShell AI 在开启多代理且用户选择「多代理」模式时走 `/api/multi-agent/stream`；机器人 `robot_use_multi_agent`、批量任务 `batch_use_multi_agent` 可分别开启；二者均需 `multi_agent.enabled`。
+- **入口策略**：主聊天与 WebShell 在开启多代理且用户选择 **Deep / Plan-Execute / Supervisor** 时走 `/api/multi-agent/stream`，请求体字段 **`orchestration`** 指定当次编排（与界面一致）；**原生 ReAct** 走 `/api/agent-loop/stream`。机器人、批量任务无该请求体时服务端按 **`deep`** 执行。均需 `multi_agent.enabled`。
 
 ## 已完成项
 
 | 项 | 说明 |
 |----|------|
 | 依赖与代理 | `go.mod` 直接依赖 `github.com/cloudwego/eino`、`eino-ext/.../openai`；`go.mod` 注释与 `scripts/bootstrap-go.sh` 指导 **GOPROXY**（如 `https://goproxy.cn,direct`）。 |
-| 配置 | `config.yaml` → `multi_agent`：`enabled`、`default_mode`、`robot_use_multi_agent`、`max_iteration`、`sub_agents`（含可选 `bind_role`）等；结构体见 `internal/config/config.go`。 |
-| Markdown 子代理 / 主代理 | **常规用法**：在 `agents_dir`（默认 `agents/`）下放 `*.md`（front matter + 正文）。**子代理**供 Deep `task` 调度；**主代理**为 `orchestrator.md` 或 `kind: orchestrator` 的单个文件，定义协调者 `description` / 系统提示（正文空则回退 `orchestrator_instruction` / Eino 默认）。可选：`multi_agent.sub_agents` 与目录合并（同 id 时 Markdown 覆盖）。管理：**Agents → Agent管理**；API：`/api/multi-agent/markdown-agents*`。 |
+| 配置 | `config.yaml` → `multi_agent`：`enabled`、`default_mode`、`robot_use_multi_agent`、`max_iteration`、`sub_agents`（含可选 `bind_role`）、`eino_skills`、`eino_middleware` 等；结构体见 `internal/config/config.go`。 |
+| Markdown 子代理 / 主代理 | 在 `agents_dir` 下放 `*.md`。**子代理**：供 Deep `task` 与 `supervisor` `transfer`。**主代理（按模式分离）**：`orchestrator.md`（或 `kind: orchestrator` 的**单个**其他 .md）→ **Deep**；固定名 `orchestrator-plan-execute.md` → **plan_execute**；固定名 `orchestrator-supervisor.md` → **supervisor**。正文优先于 YAML：`multi_agent.orchestrator_instruction`、`orchestrator_instruction_plan_execute`、`orchestrator_instruction_supervisor`；plan_execute / supervisor **不会**回退到 Deep 的 `orchestrator_instruction`。皆空时 plan_execute / supervisor 使用代码内置默认提示。管理：**Agents → Agent管理**；API：`/api/multi-agent/markdown-agents*`。 |
 | MCP 桥 | `internal/einomcp`：`ToolsFromDefinitions` + 会话 ID 持有者，执行走 `Agent.ExecuteMCPToolForConversation`。 |
-| 编排 | `internal/multiagent/runner.go`：`deep.New` + 子 `ChatModelAgent` + `adk.NewRunner`（`EnableStreaming: true`），事件映射为现有 SSE `tool_call` / `response_delta` 等。 |
+| 编排 | `internal/multiagent/runner.go`：`deep.New` + 子 `ChatModelAgent` + `adk.NewRunner`（`EnableStreaming: true`，可选 `CheckPointStore`），事件映射为现有 SSE `tool_call` / `response_delta` 等。 |
 | HTTP | `POST /api/multi-agent`（非流式）、`POST /api/multi-agent/stream`（SSE）；路由**常注册**，是否可用由运行时 `multi_agent.enabled` 决定（流式未启用时 SSE 内 `error` + `done`）。 |
 | 会话准备 | `internal/handler/multi_agent_prepare.go`：`prepareMultiAgentSession`（含 **WebShell** `CreateConversationWithWebshell`、工具白名单与单代理一致）。 |
 | 单 Agent | `internal/agent` 增加 `ToolsForRole`、`ExecuteMCPToolForConversation`；原 `/api/agent-loop` 未删改语义。 |
-| 前端 | 主聊天：`multi_agent.enabled` 时显示「模式」下拉；WebShell AI 与主聊天共用 `localStorage` 键 `cyberstrike-chat-agent-mode`。设置页可写 `multi_agent` 标量到 YAML。 |
+| 前端 | 主聊天 / WebShell：`multi_agent.enabled` 时可选 **原生 ReAct** 与三种 Eino 命名，多代理路径在 JSON 中带 `orchestration`。设置页不再配置预置编排项；`plan_execute` 外层循环上限等仍可在设置中保存。 |
 | 流式兼容 | 与 `/api/agent-loop/stream` 共用 `handleStreamEvent`：`conversation`、`progress`、`response_start` / `response_delta`、`thinking` / `thinking_stream_*`（模型 `ReasoningContent`）、`tool_*`、`response`、`done` 等；`tool_result` 带 `toolCallId` 与 `tool_call` 联动；`data.mcpExecutionIds` 与进度 i18n 已对齐。 |
-| 批量任务 | `batch_use_multi_agent: true` 时 `executeBatchQueue` 中每子任务调用 `RunDeepAgent`（`roleTools` 沿用队列角色；Eino 路径不注入 `roleSkills` 系统提示，与 Web 多代理会话一致）。 |
+| 批量任务 | 队列 `agentMode` 为 `deep` / `plan_execute` / `supervisor` 时子任务带对应 `orchestration` 调用 `RunDeepAgent`；旧值 `multi` 与「`agentMode` 为空且 `batch_use_multi_agent: true`」均按 `deep`。 |
 | 配置 API | `GET /api/config` 返回 `multi_agent: { enabled, default_mode, robot_use_multi_agent, sub_agent_count }`；`PUT /api/config` 可更新前三项（不覆盖 `sub_agents`）。 |
 | OpenAPI | 多代理路径说明已更新（流式未启用为 SSE 错误事件）。 |
 | 机器人 | `ProcessMessageForRobot` 在 `enabled && robot_use_multi_agent` 时调用 `multiagent.RunDeepAgent`。 |
+| 预置编排 | 聊天 / WebShell：`POST /api/multi-agent*` 请求体 `orchestration`：`deep` \| `plan_execute` \| `supervisor`（缺省 `deep`）。`plan_execute` 不构建 YAML/Markdown 子代理；`plan_execute_loop_max_iterations` 仍来自配置。`supervisor` 至少需一个子代理。 |
+| Eino 中间件 | `multi_agent.eino_middleware`（可选）：`patchtoolcalls`（默认开）、`toolsearch`（按阈值拆分 MCP 工具列表）、`plantask`（需 `eino_skills`）、`reduction`（大工具输出截断/落盘）、`checkpoint_dir`（Runner 断点）、`deep_output_key` / `deep_model_retry_max_retries` / `task_tool_description_prefix`（Deep 与 supervisor 主代理共享其中模型重试与 OutputKey）。`plan_execute` 的 Executor 无 Handlers：仅继承 **ToolsConfig** 侧效果（如 `tool_search` 列表拆分），不挂载 patch/plantask/reduction 中间件。 |
 
 ## 进行中 / 待办（ backlog ）
 
@@ -55,3 +57,4 @@
 | 2026-03-22 | 流式工具事件：按稳定签名去重，避免每 chunk 刷屏与「未知工具」；最终回复去重相同段落；内置调度显示为 `task`。 |
 | 2026-03-22 | `agents/*.md` 子代理定义、`agents_dir`、合并进 `RunDeepAgent`、前端 Agents 菜单与 CRUD API。 |
 | 2026-03-22 | `orchestrator.md` / `kind: orchestrator` 主代理、列表主/子标记、与 `orchestrator_instruction` 优先级。 |
+| 2026-04-19 | 主聊天「对话模式」：原生 ReAct 与 Deep / Plan-Execute / Supervisor；`POST /api/multi-agent*` 请求体 `orchestration` 与界面一致；`config.yaml` / 设置页不再维护预置编排字段（机器人/批量默认 `deep`）。 |
