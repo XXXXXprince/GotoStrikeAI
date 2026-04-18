@@ -292,6 +292,7 @@ func New(cfg *config.Config, log *logger.Logger) (*App, error) {
 	skillsDir := skillpackage.SkillsRootFromConfig(cfg.SkillsDir, configPath)
 	log.Logger.Info("Skills 目录（Eino ADK skill 中间件 + Web 管理 API）", zap.String("skillsDir", skillsDir))
 	configDir := filepath.Dir(configPath)
+	agent.SetPromptBaseDir(configDir)
 
 	agentsDir := cfg.AgentsDir
 	if agentsDir == "" {

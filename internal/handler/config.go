@@ -266,11 +266,13 @@ func (h *ConfigHandler) GetConfig(c *gin.Context) {
 		subAgentCount = len(agents.MergeYAMLAndMarkdown(h.config.MultiAgent.SubAgents, load.SubAgents))
 	}
 	multiPub := config.MultiAgentPublic{
-		Enabled:            h.config.MultiAgent.Enabled,
-		DefaultMode:        h.config.MultiAgent.DefaultMode,
-		RobotUseMultiAgent: h.config.MultiAgent.RobotUseMultiAgent,
-		BatchUseMultiAgent: h.config.MultiAgent.BatchUseMultiAgent,
-		SubAgentCount:      subAgentCount,
+		Enabled:                      h.config.MultiAgent.Enabled,
+		DefaultMode:                  h.config.MultiAgent.DefaultMode,
+		RobotUseMultiAgent:           h.config.MultiAgent.RobotUseMultiAgent,
+		BatchUseMultiAgent:           h.config.MultiAgent.BatchUseMultiAgent,
+		SubAgentCount:                subAgentCount,
+		Orchestration:                config.NormalizeMultiAgentOrchestration(h.config.MultiAgent.Orchestration),
+		PlanExecuteLoopMaxIterations: h.config.MultiAgent.PlanExecuteLoopMaxIterations,
 	}
 	if strings.TrimSpace(multiPub.DefaultMode) == "" {
 		multiPub.DefaultMode = "single"
@@ -664,11 +666,15 @@ func (h *ConfigHandler) UpdateConfig(c *gin.Context) {
 		}
 		h.config.MultiAgent.RobotUseMultiAgent = req.MultiAgent.RobotUseMultiAgent
 		h.config.MultiAgent.BatchUseMultiAgent = req.MultiAgent.BatchUseMultiAgent
+		if req.MultiAgent.PlanExecuteLoopMaxIterations != nil {
+			h.config.MultiAgent.PlanExecuteLoopMaxIterations = *req.MultiAgent.PlanExecuteLoopMaxIterations
+		}
 		h.logger.Info("更新多代理配置",
 			zap.Bool("enabled", h.config.MultiAgent.Enabled),
 			zap.String("default_mode", h.config.MultiAgent.DefaultMode),
 			zap.Bool("robot_use_multi_agent", h.config.MultiAgent.RobotUseMultiAgent),
 			zap.Bool("batch_use_multi_agent", h.config.MultiAgent.BatchUseMultiAgent),
+			zap.Int("plan_execute_loop_max_iterations", h.config.MultiAgent.PlanExecuteLoopMaxIterations),
 		)
 	}
 
@@ -1341,6 +1347,7 @@ func updateMultiAgentConfig(doc *yaml.Node, cfg config.MultiAgentConfig) {
 	setStringInMap(maNode, "default_mode", cfg.DefaultMode)
 	setBoolInMap(maNode, "robot_use_multi_agent", cfg.RobotUseMultiAgent)
 	setBoolInMap(maNode, "batch_use_multi_agent", cfg.BatchUseMultiAgent)
+	setIntInMap(maNode, "plan_execute_loop_max_iterations", cfg.PlanExecuteLoopMaxIterations)
 }
 
 func ensureMap(parent *yaml.Node, path ...string) *yaml.Node {

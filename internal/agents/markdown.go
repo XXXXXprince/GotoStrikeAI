@@ -17,6 +17,12 @@ import (
 // OrchestratorMarkdownFilename 固定文件名：存在则视为 Deep 主代理定义，且不参与子代理列表。
 const OrchestratorMarkdownFilename = "orchestrator.md"
 
+// OrchestratorPlanExecuteMarkdownFilename plan_execute 模式主代理（规划侧）专用 Markdown 文件名。
+const OrchestratorPlanExecuteMarkdownFilename = "orchestrator-plan-execute.md"
+
+// OrchestratorSupervisorMarkdownFilename supervisor 模式主代理专用 Markdown 文件名。
+const OrchestratorSupervisorMarkdownFilename = "orchestrator-supervisor.md"
+
 // FrontMatter 对应 Markdown 文件头部字段（与文档示例一致）。
 type FrontMatter struct {
 	Name          string      `yaml:"name"`
@@ -39,26 +45,58 @@ type OrchestratorMarkdown struct {
 
 // MarkdownDirLoad 一次扫描 agents 目录的结果（子代理不含主代理文件）。
 type MarkdownDirLoad struct {
-	SubAgents    []config.MultiAgentSubConfig
-	Orchestrator *OrchestratorMarkdown
-	FileEntries  []FileAgent // 含主代理与所有子代理，供管理 API 列表
+	SubAgents               []config.MultiAgentSubConfig
+	Orchestrator            *OrchestratorMarkdown // Deep 主代理
+	OrchestratorPlanExecute *OrchestratorMarkdown // plan_execute 规划主代理
+	OrchestratorSupervisor  *OrchestratorMarkdown // supervisor 监督主代理
+	FileEntries             []FileAgent           // 含主代理与所有子代理，供管理 API 列表
 }
 
-// IsOrchestratorMarkdown 判断该文件是否表示主代理：固定文件名 orchestrator.md，或 front matter kind: orchestrator。
+// OrchestratorMarkdownKind 按固定文件名返回主代理类型：deep、plan_execute、supervisor；否则返回空。
+func OrchestratorMarkdownKind(filename string) string {
+	base := filepath.Base(strings.TrimSpace(filename))
+	switch {
+	case strings.EqualFold(base, OrchestratorPlanExecuteMarkdownFilename):
+		return "plan_execute"
+	case strings.EqualFold(base, OrchestratorSupervisorMarkdownFilename):
+		return "supervisor"
+	case strings.EqualFold(base, OrchestratorMarkdownFilename):
+		return "deep"
+	default:
+		return ""
+	}
+}
+
+// IsOrchestratorMarkdown 判断该文件是否占用 **Deep** 主代理槽位：orchestrator.md、或 kind: orchestrator（不含 plan_execute / supervisor 专用文件名）。
 func IsOrchestratorMarkdown(filename string, fm FrontMatter) bool {
 	base := filepath.Base(strings.TrimSpace(filename))
+	switch OrchestratorMarkdownKind(base) {
+	case "plan_execute", "supervisor":
+		return false
+	}
 	if strings.EqualFold(base, OrchestratorMarkdownFilename) {
 		return true
 	}
 	return strings.EqualFold(strings.TrimSpace(fm.Kind), "orchestrator")
 }
 
+// IsOrchestratorLikeMarkdown 是否应在前端/API 中显示为「主代理类」文件。
+func IsOrchestratorLikeMarkdown(filename string, kind string) bool {
+	if OrchestratorMarkdownKind(filename) != "" {
+		return true
+	}
+	return IsOrchestratorMarkdown(filename, FrontMatter{Kind: kind})
+}
+
 // WantsMarkdownOrchestrator 保存前判断是否会把该文件作为主代理（用于唯一性校验）。
 func WantsMarkdownOrchestrator(filename string, kindField string, raw string) bool {
+	base := filepath.Base(strings.TrimSpace(filename))
+	if OrchestratorMarkdownKind(base) != "" {
+		return true
+	}
 	if strings.EqualFold(strings.TrimSpace(kindField), "orchestrator") {
 		return true
 	}
-	base := filepath.Base(strings.TrimSpace(filename))
 	if strings.EqualFold(base, OrchestratorMarkdownFilename) {
 		return true
 	}
@@ -286,7 +324,7 @@ func collectMarkdownBasenames(dir string) ([]string, error) {
 	return names, nil
 }
 
-// LoadMarkdownAgentsDir 扫描 agents 目录：拆出至多一个主代理与其余子代理。
+// LoadMarkdownAgentsDir 扫描 agents 目录：拆出 Deep / plan_execute / supervisor 主代理各至多一个，及其余子代理。
 func LoadMarkdownAgentsDir(dir string) (*MarkdownDirLoad, error) {
 	out := &MarkdownDirLoad{}
 	names, err := collectMarkdownBasenames(dir)
@@ -302,6 +340,38 @@ func LoadMarkdownAgentsDir(dir string) (*MarkdownDirLoad, error) {
 		fm, body, err := parseMarkdownAgentRaw(n, string(b))
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", n, err)
+		}
+		switch OrchestratorMarkdownKind(n) {
+		case "plan_execute":
+			if out.OrchestratorPlanExecute != nil {
+				return nil, fmt.Errorf("agents: 仅能定义一个 %s，已有 %s", OrchestratorPlanExecuteMarkdownFilename, out.OrchestratorPlanExecute.Filename)
+			}
+			orch, err := orchestratorFromParsed(n, fm, body)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", n, err)
+			}
+			out.OrchestratorPlanExecute = orch
+			out.FileEntries = append(out.FileEntries, FileAgent{
+				Filename:       n,
+				Config:         orchestratorConfigFromOrchestrator(orch),
+				IsOrchestrator: true,
+			})
+			continue
+		case "supervisor":
+			if out.OrchestratorSupervisor != nil {
+				return nil, fmt.Errorf("agents: 仅能定义一个 %s，已有 %s", OrchestratorSupervisorMarkdownFilename, out.OrchestratorSupervisor.Filename)
+			}
+			orch, err := orchestratorFromParsed(n, fm, body)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", n, err)
+			}
+			out.OrchestratorSupervisor = orch
+			out.FileEntries = append(out.FileEntries, FileAgent{
+				Filename:       n,
+				Config:         orchestratorConfigFromOrchestrator(orch),
+				IsOrchestrator: true,
+			})
+			continue
 		}
 		if IsOrchestratorMarkdown(n, fm) {
 			if out.Orchestrator != nil {
@@ -334,6 +404,13 @@ func ParseMarkdownSubAgent(filename string, content string) (config.MultiAgentSu
 	fm, body, err := parseMarkdownAgentRaw(filename, content)
 	if err != nil {
 		return config.MultiAgentSubConfig{}, err
+	}
+	if OrchestratorMarkdownKind(filename) != "" {
+		orch, err := orchestratorFromParsed(filename, fm, body)
+		if err != nil {
+			return config.MultiAgentSubConfig{}, err
+		}
+		return orchestratorConfigFromOrchestrator(orch), nil
 	}
 	if IsOrchestratorMarkdown(filename, fm) {
 		orch, err := orchestratorFromParsed(filename, fm, body)

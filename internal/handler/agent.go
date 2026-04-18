@@ -177,6 +177,8 @@ type ChatRequest struct {
 	Role                 string           `json:"role,omitempty"` // 角色名称
 	Attachments          []ChatAttachment `json:"attachments,omitempty"`
 	WebShellConnectionID string           `json:"webshellConnectionId,omitempty"` // WebShell 管理 - AI 助手：当前选中的连接 ID，仅使用 webshell_* 工具
+	// Orchestration 仅对 /api/multi-agent、/api/multi-agent/stream：deep | plan_execute | supervisor；空则等同 deep。机器人/批量等无请求体时由服务端默认 deep。
+	Orchestration string `json:"orchestration,omitempty"`
 }
 
 const (
@@ -673,6 +675,7 @@ func (h *AgentHandler) ProcessMessageForRobot(ctx context.Context, conversationI
 			roleTools,
 			progressCallback,
 			h.agentsMarkdownDir,
+			"deep",
 		)
 		if errMA != nil {
 			errMsg := "执行失败: " + errMA.Error()
@@ -1616,17 +1619,34 @@ type BatchTaskRequest struct {
 	Title        string   `json:"title"`                    // 任务标题（可选）
 	Tasks        []string `json:"tasks" binding:"required"` // 任务列表，每行一个任务
 	Role         string   `json:"role,omitempty"`           // 角色名称（可选，空字符串表示默认角色）
-	AgentMode    string   `json:"agentMode,omitempty"`      // single | multi
+	AgentMode    string   `json:"agentMode,omitempty"`      // single | deep | plan_execute | supervisor（旧版 multi 视为 deep）
 	ScheduleMode string   `json:"scheduleMode,omitempty"`   // manual | cron
 	CronExpr     string   `json:"cronExpr,omitempty"`       // scheduleMode=cron 时必填
 	ExecuteNow   bool     `json:"executeNow,omitempty"`     // 创建后是否立即执行（默认 false）
 }
 
 func normalizeBatchQueueAgentMode(mode string) string {
-	if strings.TrimSpace(mode) == "multi" {
-		return "multi"
+	m := strings.TrimSpace(strings.ToLower(mode))
+	if m == "multi" {
+		return "deep"
 	}
-	return "single"
+	if m == "" || m == "single" {
+		return "single"
+	}
+	switch config.NormalizeMultiAgentOrchestration(m) {
+	case "plan_execute":
+		return "plan_execute"
+	case "supervisor":
+		return "supervisor"
+	default:
+		return "deep"
+	}
+}
+
+// batchQueueWantsEino 队列是否配置为走 Eino 多代理（不含「空 agentMode + 仅 BatchUseMultiAgent」这种运行期推断）。
+func batchQueueWantsEino(agentMode string) bool {
+	m := strings.TrimSpace(strings.ToLower(agentMode))
+	return m == "multi" || m == "deep" || m == "plan_execute" || m == "supervisor"
 }
 
 func normalizeBatchQueueScheduleMode(mode string) string {
@@ -2093,9 +2113,9 @@ func (h *AgentHandler) startBatchQueueExecution(queueID string, scheduled bool) 
 		return true, fmt.Errorf("队列状态不允许启动")
 	}
 
-	if queue != nil && queue.AgentMode == "multi" && (h.config == nil || !h.config.MultiAgent.Enabled) {
+	if queue != nil && batchQueueWantsEino(queue.AgentMode) && (h.config == nil || !h.config.MultiAgent.Enabled) {
 		h.unmarkBatchQueueRunning(queueID)
-		err := fmt.Errorf("当前队列配置为多代理，但系统未启用多代理")
+		err := fmt.Errorf("当前队列配置为 Eino 多代理，但系统未启用多代理")
 		if scheduled {
 			h.batchTaskManager.SetLastScheduleError(queueID, err.Error())
 		}
@@ -2252,17 +2272,26 @@ func (h *AgentHandler) executeBatchQueue(queueID string) {
 		// 使用队列配置的角色工具列表（如果为空，表示使用所有工具）
 		// 注意：skills不会硬编码注入，但会在系统提示词中提示AI这个角色推荐使用哪些skills
 		useBatchMulti := false
-		if queue.AgentMode == "multi" {
-			useBatchMulti = h.config != nil && h.config.MultiAgent.Enabled
+		batchOrch := "deep"
+		am := strings.TrimSpace(strings.ToLower(queue.AgentMode))
+		if am == "multi" {
+			am = "deep"
+		}
+		if batchQueueWantsEino(queue.AgentMode) && h.config != nil && h.config.MultiAgent.Enabled {
+			useBatchMulti = true
+			batchOrch = config.NormalizeMultiAgentOrchestration(am)
 		} else if queue.AgentMode == "" {
 			// 兼容历史数据：未配置队列代理模式时，沿用旧的系统级开关
-			useBatchMulti = h.config != nil && h.config.MultiAgent.Enabled && h.config.MultiAgent.BatchUseMultiAgent
+			if h.config != nil && h.config.MultiAgent.Enabled && h.config.MultiAgent.BatchUseMultiAgent {
+				useBatchMulti = true
+				batchOrch = "deep"
+			}
 		}
 		var result *agent.AgentLoopResult
 		var resultMA *multiagent.RunResult
 		var runErr error
 		if useBatchMulti {
-			resultMA, runErr = multiagent.RunDeepAgent(ctx, h.config, &h.config.MultiAgent, h.agent, h.logger, conversationID, finalMessage, []agent.ChatMessage{}, roleTools, progressCallback, h.agentsMarkdownDir)
+			resultMA, runErr = multiagent.RunDeepAgent(ctx, h.config, &h.config.MultiAgent, h.agent, h.logger, conversationID, finalMessage, []agent.ChatMessage{}, roleTools, progressCallback, h.agentsMarkdownDir, batchOrch)
 		} else {
 			result, runErr = h.agent.AgentLoopWithProgress(ctx, finalMessage, []agent.ChatMessage{}, conversationID, progressCallback, roleTools, roleSkills)
 		}

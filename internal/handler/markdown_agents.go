@@ -38,19 +38,32 @@ func (h *MarkdownAgentsHandler) safeJoin(filename string) (string, error) {
 	return filepath.Join(h.dir, clean), nil
 }
 
-// existingOtherOrchestrator 若目录中已有别的主代理文件，返回其文件名；writingBasename 为当前正在写入的文件名时视为同一文件不冲突。
+// existingOtherOrchestrator 若目录中已有同槽位的其他主代理文件，返回其文件名；writingBasename 为当前正在写入的文件名时不冲突。
 func existingOtherOrchestrator(dir, writingBasename string) (other string, err error) {
 	load, err := agents.LoadMarkdownAgentsDir(dir)
 	if err != nil {
 		return "", err
 	}
-	if load.Orchestrator == nil {
-		return "", nil
+	wb := filepath.Base(strings.TrimSpace(writingBasename))
+	switch agents.OrchestratorMarkdownKind(wb) {
+	case "plan_execute":
+		if load.OrchestratorPlanExecute != nil && !strings.EqualFold(load.OrchestratorPlanExecute.Filename, wb) {
+			return load.OrchestratorPlanExecute.Filename, nil
+		}
+	case "supervisor":
+		if load.OrchestratorSupervisor != nil && !strings.EqualFold(load.OrchestratorSupervisor.Filename, wb) {
+			return load.OrchestratorSupervisor.Filename, nil
+		}
+	case "deep":
+		if load.Orchestrator != nil && !strings.EqualFold(load.Orchestrator.Filename, wb) {
+			return load.Orchestrator.Filename, nil
+		}
+	default:
+		if load.Orchestrator != nil && !strings.EqualFold(load.Orchestrator.Filename, wb) {
+			return load.Orchestrator.Filename, nil
+		}
 	}
-	if strings.EqualFold(load.Orchestrator.Filename, writingBasename) {
-		return "", nil
-	}
-	return load.Orchestrator.Filename, nil
+	return "", nil
 }
 
 // ListMarkdownAgents GET /api/multi-agent/markdown-agents
@@ -101,7 +114,7 @@ func (h *MarkdownAgentsHandler) GetMarkdownAgent(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	isOrch := agents.IsOrchestratorMarkdown(filename, agents.FrontMatter{Kind: sub.Kind})
+	isOrch := agents.IsOrchestratorLikeMarkdown(filename, sub.Kind)
 	c.JSON(http.StatusOK, gin.H{
 		"filename":        filename,
 		"raw":             string(b),
@@ -172,7 +185,10 @@ func (h *MarkdownAgentsHandler) CreateMarkdownAgent(c *gin.Context) {
 		MaxIterations: body.MaxIterations,
 		Kind:          strings.TrimSpace(body.Kind),
 	}
-	if strings.EqualFold(filepath.Base(path), agents.OrchestratorMarkdownFilename) && sub.Kind == "" {
+	base := filepath.Base(path)
+	if (strings.EqualFold(base, agents.OrchestratorMarkdownFilename) ||
+		strings.EqualFold(base, agents.OrchestratorPlanExecuteMarkdownFilename) ||
+		strings.EqualFold(base, agents.OrchestratorSupervisorMarkdownFilename)) && sub.Kind == "" {
 		sub.Kind = "orchestrator"
 	}
 	if sub.ID == "" {
@@ -237,7 +253,9 @@ func (h *MarkdownAgentsHandler) UpdateMarkdownAgent(c *gin.Context) {
 		MaxIterations: body.MaxIterations,
 		Kind:          strings.TrimSpace(body.Kind),
 	}
-	if strings.EqualFold(filename, agents.OrchestratorMarkdownFilename) && sub.Kind == "" {
+	if (strings.EqualFold(filename, agents.OrchestratorMarkdownFilename) ||
+		strings.EqualFold(filename, agents.OrchestratorPlanExecuteMarkdownFilename) ||
+		strings.EqualFold(filename, agents.OrchestratorSupervisorMarkdownFilename)) && sub.Kind == "" {
 		sub.Kind = "orchestrator"
 	}
 	if sub.Name == "" {

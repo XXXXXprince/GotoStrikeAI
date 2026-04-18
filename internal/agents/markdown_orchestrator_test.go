@@ -64,3 +64,34 @@ func TestLoadMarkdownAgentsDir_DuplicateOrchestrator(t *testing.T) {
 		t.Fatal("expected duplicate orchestrator error")
 	}
 }
+
+func TestLoadMarkdownAgentsDir_ModeOrchestratorsCoexist(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(OrchestratorMarkdownFilename, "---\nname: Deep\n---\n\ndeep\n")
+	write(OrchestratorPlanExecuteMarkdownFilename, "---\nname: PE\n---\n\npe\n")
+	write(OrchestratorSupervisorMarkdownFilename, "---\nname: SV\n---\n\nsv\n")
+	write("worker.md", "---\nid: worker\nname: Worker\n---\n\nw\n")
+
+	load, err := LoadMarkdownAgentsDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if load.Orchestrator == nil || load.Orchestrator.Instruction != "deep" {
+		t.Fatalf("deep: %+v", load.Orchestrator)
+	}
+	if load.OrchestratorPlanExecute == nil || load.OrchestratorPlanExecute.Instruction != "pe" {
+		t.Fatalf("pe: %+v", load.OrchestratorPlanExecute)
+	}
+	if load.OrchestratorSupervisor == nil || load.OrchestratorSupervisor.Instruction != "sv" {
+		t.Fatalf("sv: %+v", load.OrchestratorSupervisor)
+	}
+	if len(load.SubAgents) != 1 || load.SubAgents[0].ID != "worker" {
+		t.Fatalf("subs: %+v", load.SubAgents)
+	}
+}

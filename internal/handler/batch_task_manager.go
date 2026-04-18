@@ -57,7 +57,7 @@ type BatchTaskQueue struct {
 	ID                    string       `json:"id"`
 	Title                 string       `json:"title,omitempty"`
 	Role                  string       `json:"role,omitempty"` // 角色名称（空字符串表示默认角色）
-	AgentMode             string       `json:"agentMode"`      // single | multi
+	AgentMode             string       `json:"agentMode"`      // single | deep | plan_execute | supervisor
 	ScheduleMode          string       `json:"scheduleMode"`   // manual | cron
 	CronExpr              string       `json:"cronExpr,omitempty"`
 	NextRunAt             *time.Time   `json:"nextRunAt,omitempty"`

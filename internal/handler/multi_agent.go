@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"cyberstrike-ai/internal/config"
 	"cyberstrike-ai/internal/multiagent"
 
 	"github.com/gin-gonic/gin"
@@ -139,7 +140,7 @@ func (h *AgentHandler) MultiAgentLoopStream(c *gin.Context) {
 	taskStatus := "completed"
 	defer h.tasks.FinishTask(conversationID, taskStatus)
 
-	sendEvent("progress", "正在启动 Eino DeepAgent...", map[string]interface{}{
+	sendEvent("progress", "正在启动 Eino 多代理...", map[string]interface{}{
 		"conversationId": conversationID,
 	})
 
@@ -159,6 +160,7 @@ func (h *AgentHandler) MultiAgentLoopStream(c *gin.Context) {
 		prep.RoleTools,
 		progressCallback,
 		h.agentsMarkdownDir,
+		strings.TrimSpace(req.Orchestration),
 	)
 
 	if runErr != nil {
@@ -215,11 +217,15 @@ func (h *AgentHandler) MultiAgentLoopStream(c *gin.Context) {
 		}
 	}
 
+	effectiveOrch := config.NormalizeMultiAgentOrchestration(h.config.MultiAgent.Orchestration)
+	if o := strings.TrimSpace(req.Orchestration); o != "" {
+		effectiveOrch = config.NormalizeMultiAgentOrchestration(o)
+	}
 	sendEvent("response", result.Response, map[string]interface{}{
 		"mcpExecutionIds": result.MCPExecutionIDs,
 		"conversationId":  conversationID,
 		"messageId":       assistantMessageID,
-		"agentMode":       "eino_deep",
+		"agentMode":       "eino_" + effectiveOrch,
 	})
 	sendEvent("done", "", map[string]interface{}{"conversationId": conversationID})
 }
@@ -258,6 +264,7 @@ func (h *AgentHandler) MultiAgentLoop(c *gin.Context) {
 		prep.RoleTools,
 		nil,
 		h.agentsMarkdownDir,
+		strings.TrimSpace(req.Orchestration),
 	)
 	if runErr != nil {
 		h.logger.Error("Eino DeepAgent 执行失败", zap.Error(runErr))
