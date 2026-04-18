@@ -1,4 +1,4 @@
-// Package multiagent 使用 CloudWeGo Eino 的 DeepAgent（adk/prebuilt/deep）编排多代理，MCP 工具经 einomcp 桥接到现有 Agent。
+// Package multiagent 使用 CloudWeGo Eino adk/prebuilt（deep / plan_execute / supervisor）编排多代理，MCP 工具经 einomcp 桥接到现有 Agent。
 package multiagent
 
 import (
@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
 	"net/http"
 	"sort"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/adk/filesystem"
 	"github.com/cloudwego/eino/adk/prebuilt/deep"
+	"github.com/cloudwego/eino/adk/prebuilt/supervisor"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 	"go.uber.org/zap"
@@ -48,7 +50,8 @@ type toolCallPendingInfo struct {
 	EinoRole   string
 }
 
-// RunDeepAgent 使用 Eino DeepAgent 执行一轮对话（流式事件通过 progress 回调输出）。
+// RunDeepAgent 使用 Eino 多代理预置编排执行一轮对话（deep / plan_execute / supervisor；流式事件通过 progress 回调输出）。
+// orchestrationOverride 非空时优先（如聊天/WebShell 请求体）；否则用 multi_agent.orchestration（遗留 yaml）；皆空则按 deep。
 func RunDeepAgent(
 	ctx context.Context,
 	appCfg *config.Config,
@@ -61,12 +64,14 @@ func RunDeepAgent(
 	roleTools []string,
 	progress func(eventType, message string, data interface{}),
 	agentsMarkdownDir string,
+	orchestrationOverride string,
 ) (*RunResult, error) {
 	if appCfg == nil || ma == nil || ag == nil {
 		return nil, fmt.Errorf("multiagent: 配置或 Agent 为空")
 	}
 
 	effectiveSubs := ma.SubAgents
+	var markdownLoad *agents.MarkdownDirLoad
 	var orch *agents.OrchestratorMarkdown
 	if strings.TrimSpace(agentsMarkdownDir) != "" {
 		load, merr := agents.LoadMarkdownAgentsDir(agentsMarkdownDir)
@@ -75,15 +80,23 @@ func RunDeepAgent(
 				logger.Warn("加载 agents 目录 Markdown 失败，沿用 config 中的 sub_agents", zap.Error(merr))
 			}
 		} else {
+			markdownLoad = load
 			effectiveSubs = agents.MergeYAMLAndMarkdown(ma.SubAgents, load.SubAgents)
 			orch = load.Orchestrator
 		}
 	}
-	if ma.WithoutGeneralSubAgent && len(effectiveSubs) == 0 {
+	orchMode := config.NormalizeMultiAgentOrchestration(ma.Orchestration)
+	if o := strings.TrimSpace(orchestrationOverride); o != "" {
+		orchMode = config.NormalizeMultiAgentOrchestration(o)
+	}
+	if orchMode != "plan_execute" && ma.WithoutGeneralSubAgent && len(effectiveSubs) == 0 {
 		return nil, fmt.Errorf("multi_agent.without_general_sub_agent 为 true 时，必须在 multi_agent.sub_agents 或 agents 目录 Markdown 中配置至少一个子代理")
 	}
+	if orchMode == "supervisor" && len(effectiveSubs) == 0 {
+		return nil, fmt.Errorf("multi_agent.orchestration=supervisor 时需至少配置一个子代理（sub_agents 或 agents 目录 Markdown）")
+	}
 
-	einoLoc, einoSkillMW, einoFSTools, einoErr := prepareEinoSkills(ctx, appCfg.SkillsDir, ma, logger)
+	einoLoc, einoSkillMW, einoFSTools, skillsRoot, einoErr := prepareEinoSkills(ctx, appCfg.SkillsDir, ma, logger)
 	if einoErr != nil {
 		return nil, einoErr
 	}
@@ -133,6 +146,11 @@ func RunDeepAgent(
 		return nil, err
 	}
 
+	mainToolsForCfg, mainOrchestratorPre, err := prependEinoMiddlewares(ctx, &ma.EinoMiddleware, einoMWMain, mainTools, einoLoc, skillsRoot, conversationID, logger)
+	if err != nil {
+		return nil, err
+	}
+
 	httpClient := &http.Client{
 		Timeout: 30 * time.Minute,
 		Transport: &http.Transport{
@@ -171,131 +189,163 @@ func RunDeepAgent(
 		subDefaultIter = 20
 	}
 
-	subAgents := make([]adk.Agent, 0, len(effectiveSubs))
-	for _, sub := range effectiveSubs {
-		id := strings.TrimSpace(sub.ID)
-		if id == "" {
-			return nil, fmt.Errorf("multi_agent.sub_agents 中存在空的 id")
-		}
-		name := strings.TrimSpace(sub.Name)
-		if name == "" {
-			name = id
-		}
-		desc := strings.TrimSpace(sub.Description)
-		if desc == "" {
-			desc = fmt.Sprintf("Specialist agent %s for penetration testing workflow.", id)
-		}
-		instr := strings.TrimSpace(sub.Instruction)
-		if instr == "" {
-			instr = "你是 CyberStrikeAI 中的专业子代理，在授权渗透测试场景下协助完成用户委托的子任务。优先使用可用工具获取证据，回答简洁专业。"
-		}
+	var subAgents []adk.Agent
+	if orchMode != "plan_execute" {
+		subAgents = make([]adk.Agent, 0, len(effectiveSubs))
+		for _, sub := range effectiveSubs {
+			id := strings.TrimSpace(sub.ID)
+			if id == "" {
+				return nil, fmt.Errorf("multi_agent.sub_agents 中存在空的 id")
+			}
+			name := strings.TrimSpace(sub.Name)
+			if name == "" {
+				name = id
+			}
+			desc := strings.TrimSpace(sub.Description)
+			if desc == "" {
+				desc = fmt.Sprintf("Specialist agent %s for penetration testing workflow.", id)
+			}
+			instr := strings.TrimSpace(sub.Instruction)
+			if instr == "" {
+				instr = "你是 CyberStrikeAI 中的专业子代理，在授权渗透测试场景下协助完成用户委托的子任务。优先使用可用工具获取证据，回答简洁专业。"
+			}
 
-		roleTools := sub.RoleTools
-		bind := strings.TrimSpace(sub.BindRole)
-		if bind != "" && appCfg.Roles != nil {
-			if r, ok := appCfg.Roles[bind]; ok && r.Enabled {
-				if len(roleTools) == 0 && len(r.Tools) > 0 {
-					roleTools = r.Tools
-				}
-				if len(r.Skills) > 0 {
-					var b strings.Builder
-					b.WriteString(instr)
-					b.WriteString("\n\n本角色推荐优先通过 Eino `skill` 工具（渐进式披露）加载的技能包 name：")
-					for i, s := range r.Skills {
-						if i > 0 {
-							b.WriteString("、")
-						}
-						b.WriteString(s)
+			roleTools := sub.RoleTools
+			bind := strings.TrimSpace(sub.BindRole)
+			if bind != "" && appCfg.Roles != nil {
+				if r, ok := appCfg.Roles[bind]; ok && r.Enabled {
+					if len(roleTools) == 0 && len(r.Tools) > 0 {
+						roleTools = r.Tools
 					}
-					b.WriteString("。")
-					instr = b.String()
+					if len(r.Skills) > 0 {
+						var b strings.Builder
+						b.WriteString(instr)
+						b.WriteString("\n\n本角色推荐优先通过 Eino `skill` 工具（渐进式披露）加载的技能包 name：")
+						for i, s := range r.Skills {
+							if i > 0 {
+								b.WriteString("、")
+							}
+							b.WriteString(s)
+						}
+						b.WriteString("。")
+						instr = b.String()
+					}
 				}
 			}
-		}
 
-		subModel, err := einoopenai.NewChatModel(ctx, baseModelCfg)
-		if err != nil {
-			return nil, fmt.Errorf("子代理 %q ChatModel: %w", id, err)
-		}
-
-		subDefs := ag.ToolsForRole(roleTools)
-		subTools, err := einomcp.ToolsFromDefinitions(ag, holder, subDefs, recorder, toolOutputChunk)
-		if err != nil {
-			return nil, fmt.Errorf("子代理 %q 工具: %w", id, err)
-		}
-
-		subMax := sub.MaxIterations
-		if subMax <= 0 {
-			subMax = subDefaultIter
-		}
-
-		subSumMw, err := newEinoSummarizationMiddleware(ctx, subModel, appCfg, logger)
-		if err != nil {
-			return nil, fmt.Errorf("子代理 %q summarization 中间件: %w", id, err)
-		}
-
-		var subHandlers []adk.ChatModelAgentMiddleware
-		if einoSkillMW != nil {
-			if einoFSTools && einoLoc != nil {
-				subFs, fsErr := subAgentFilesystemMiddleware(ctx, einoLoc)
-				if fsErr != nil {
-					return nil, fmt.Errorf("子代理 %q filesystem 中间件: %w", id, fsErr)
-				}
-				subHandlers = append(subHandlers, subFs)
+			subModel, err := einoopenai.NewChatModel(ctx, baseModelCfg)
+			if err != nil {
+				return nil, fmt.Errorf("子代理 %q ChatModel: %w", id, err)
 			}
-			subHandlers = append(subHandlers, einoSkillMW)
-		}
-		subHandlers = append(subHandlers, subSumMw)
 
-		sa, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
-			Name:        id,
-			Description: desc,
-			Instruction: instr,
-			Model:       subModel,
-			ToolsConfig: adk.ToolsConfig{
-				ToolsNodeConfig: compose.ToolsNodeConfig{
-					Tools:               subTools,
-					UnknownToolsHandler: einomcp.UnknownToolReminderHandler(),
-					ToolCallMiddlewares: []compose.ToolMiddleware{
-						{Invokable: softRecoveryToolCallMiddleware()},
+			subDefs := ag.ToolsForRole(roleTools)
+			subTools, err := einomcp.ToolsFromDefinitions(ag, holder, subDefs, recorder, toolOutputChunk)
+			if err != nil {
+				return nil, fmt.Errorf("子代理 %q 工具: %w", id, err)
+			}
+
+			subToolsForCfg, subPre, err := prependEinoMiddlewares(ctx, &ma.EinoMiddleware, einoMWSub, subTools, einoLoc, skillsRoot, conversationID, logger)
+			if err != nil {
+				return nil, fmt.Errorf("子代理 %q eino 中间件: %w", id, err)
+			}
+
+			subMax := sub.MaxIterations
+			if subMax <= 0 {
+				subMax = subDefaultIter
+			}
+
+			subSumMw, err := newEinoSummarizationMiddleware(ctx, subModel, appCfg, logger)
+			if err != nil {
+				return nil, fmt.Errorf("子代理 %q summarization 中间件: %w", id, err)
+			}
+
+			var subHandlers []adk.ChatModelAgentMiddleware
+			if len(subPre) > 0 {
+				subHandlers = append(subHandlers, subPre...)
+			}
+			if einoSkillMW != nil {
+				if einoFSTools && einoLoc != nil {
+					subFs, fsErr := subAgentFilesystemMiddleware(ctx, einoLoc)
+					if fsErr != nil {
+						return nil, fmt.Errorf("子代理 %q filesystem 中间件: %w", id, fsErr)
+					}
+					subHandlers = append(subHandlers, subFs)
+				}
+				subHandlers = append(subHandlers, einoSkillMW)
+			}
+			subHandlers = append(subHandlers, subSumMw)
+
+			sa, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
+				Name:        id,
+				Description: desc,
+				Instruction: instr,
+				Model:       subModel,
+				ToolsConfig: adk.ToolsConfig{
+					ToolsNodeConfig: compose.ToolsNodeConfig{
+						Tools:               subToolsForCfg,
+						UnknownToolsHandler: einomcp.UnknownToolReminderHandler(),
+						ToolCallMiddlewares: []compose.ToolMiddleware{
+							{Invokable: softRecoveryToolCallMiddleware()},
+						},
 					},
+					EmitInternalEvents: true,
 				},
-				EmitInternalEvents: true,
-			},
-			MaxIterations: subMax,
-			Handlers:      subHandlers,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("子代理 %q: %w", id, err)
+				MaxIterations: subMax,
+				Handlers:      subHandlers,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("子代理 %q: %w", id, err)
+			}
+			subAgents = append(subAgents, sa)
 		}
-		subAgents = append(subAgents, sa)
 	}
 
 	mainModel, err := einoopenai.NewChatModel(ctx, baseModelCfg)
 	if err != nil {
-		return nil, fmt.Errorf("Deep 主模型: %w", err)
+		return nil, fmt.Errorf("多代理主模型: %w", err)
 	}
 
 	mainSumMw, err := newEinoSummarizationMiddleware(ctx, mainModel, appCfg, logger)
 	if err != nil {
-		return nil, fmt.Errorf("Deep 主代理 summarization 中间件: %w", err)
+		return nil, fmt.Errorf("多代理主 summarization 中间件: %w", err)
 	}
 
-	// 与 deep.Config.Name 一致。子代理的 assistant 正文也会经 EmitInternalEvents 流出，若全部当主回复会重复（编排器总结 + 子代理原文）。
+	// 与 deep.Config.Name / supervisor 主代理 Name 一致。
 	orchestratorName := "cyberstrike-deep"
 	orchDescription := "Coordinates specialist agents and MCP tools for authorized security testing."
-	orchInstruction := strings.TrimSpace(ma.OrchestratorInstruction)
-	if orch != nil {
+	orchInstruction, orchMeta := resolveMainOrchestratorInstruction(orchMode, ma, markdownLoad)
+	if orchMeta != nil {
+		if strings.TrimSpace(orchMeta.EinoName) != "" {
+			orchestratorName = strings.TrimSpace(orchMeta.EinoName)
+		}
+		if d := strings.TrimSpace(orchMeta.Description); d != "" {
+			orchDescription = d
+		}
+	} else if orchMode == "deep" && orch != nil {
 		if strings.TrimSpace(orch.EinoName) != "" {
 			orchestratorName = strings.TrimSpace(orch.EinoName)
 		}
 		if d := strings.TrimSpace(orch.Description); d != "" {
 			orchDescription = d
 		}
-		if ins := strings.TrimSpace(orch.Instruction); ins != "" {
-			orchInstruction = ins
-		}
 	}
+
+	supInstr := strings.TrimSpace(orchInstruction)
+	if orchMode == "supervisor" {
+		var sb strings.Builder
+		if supInstr != "" {
+			sb.WriteString(supInstr)
+			sb.WriteString("\n\n")
+		}
+		sb.WriteString("你是监督协调者：可将任务通过 transfer 工具委派给下列专家子代理（使用其在系统中的 Agent 名称）。专家列表：")
+		for _, sa := range subAgents {
+			sb.WriteString("\n- ")
+			sb.WriteString(sa.Name(ctx))
+		}
+		sb.WriteString("\n\n当你已完成用户目标或需要将最终结论交付用户时，使用 exit 工具结束。")
+		supInstr = sb.String()
+	}
+
 	var deepBackend filesystem.Backend
 	var deepShell filesystem.StreamingShell
 	if einoLoc != nil && einoFSTools {
@@ -304,46 +354,128 @@ func RunDeepAgent(
 	}
 
 	deepHandlers := []adk.ChatModelAgentMiddleware{}
+	if len(mainOrchestratorPre) > 0 {
+		deepHandlers = append(deepHandlers, mainOrchestratorPre...)
+	}
 	if einoSkillMW != nil {
 		deepHandlers = append(deepHandlers, einoSkillMW)
 	}
 	deepHandlers = append(deepHandlers, newNoNestedTaskMiddleware(), mainSumMw)
 
-	da, err := deep.New(ctx, &deep.Config{
-		Name:                   orchestratorName,
-		Description:            orchDescription,
-		ChatModel:              mainModel,
-		Instruction:            orchInstruction,
-		SubAgents:              subAgents,
-		WithoutGeneralSubAgent: ma.WithoutGeneralSubAgent,
-		WithoutWriteTodos:      ma.WithoutWriteTodos,
-		MaxIteration:           deepMaxIter,
-		Backend:                deepBackend,
-		StreamingShell:         deepShell,
-		// 防止 sub-agent 再调用 task（再委派 sub-agent），形成无限委派链。
-		Handlers: deepHandlers,
-		ToolsConfig: adk.ToolsConfig{
-			ToolsNodeConfig: compose.ToolsNodeConfig{
-				Tools:               mainTools,
-				UnknownToolsHandler: einomcp.UnknownToolReminderHandler(),
-				ToolCallMiddlewares: []compose.ToolMiddleware{
-					{Invokable: softRecoveryToolCallMiddleware()},
-				},
+	supHandlers := []adk.ChatModelAgentMiddleware{}
+	if len(mainOrchestratorPre) > 0 {
+		supHandlers = append(supHandlers, mainOrchestratorPre...)
+	}
+	if einoSkillMW != nil {
+		supHandlers = append(supHandlers, einoSkillMW)
+	}
+	supHandlers = append(supHandlers, mainSumMw)
+
+	mainToolsCfg := adk.ToolsConfig{
+		ToolsNodeConfig: compose.ToolsNodeConfig{
+			Tools:               mainToolsForCfg,
+			UnknownToolsHandler: einomcp.UnknownToolReminderHandler(),
+			ToolCallMiddlewares: []compose.ToolMiddleware{
+				{Invokable: softRecoveryToolCallMiddleware()},
 			},
-			EmitInternalEvents: true,
 		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("deep.New: %w", err)
+		EmitInternalEvents: true,
+	}
+
+	deepOutKey, modelRetry, taskGen := deepExtrasFromConfig(ma)
+
+	var da adk.Agent
+	switch orchMode {
+	case "plan_execute":
+		execModel, perr := einoopenai.NewChatModel(ctx, baseModelCfg)
+		if perr != nil {
+			return nil, fmt.Errorf("plan_execute 执行器模型: %w", perr)
+		}
+		peRoot, perr := NewPlanExecuteRoot(ctx, &PlanExecuteRootArgs{
+			MainToolCallingModel: mainModel,
+			ExecModel:            execModel,
+			OrchInstruction:      orchInstruction,
+			ToolsCfg:             mainToolsCfg,
+			ExecMaxIter:          deepMaxIter,
+			LoopMaxIter:          ma.PlanExecuteLoopMaxIterations,
+		})
+		if perr != nil {
+			return nil, perr
+		}
+		da = peRoot
+	case "supervisor":
+		supCfg := &adk.ChatModelAgentConfig{
+			Name:          orchestratorName,
+			Description:   orchDescription,
+			Instruction:   supInstr,
+			Model:         mainModel,
+			ToolsConfig:   mainToolsCfg,
+			MaxIterations: deepMaxIter,
+			Handlers:      supHandlers,
+			Exit:          &adk.ExitTool{},
+		}
+		if modelRetry != nil {
+			supCfg.ModelRetryConfig = modelRetry
+		}
+		if deepOutKey != "" {
+			supCfg.OutputKey = deepOutKey
+		}
+		superChat, serr := adk.NewChatModelAgent(ctx, supCfg)
+		if serr != nil {
+			return nil, fmt.Errorf("supervisor 主代理: %w", serr)
+		}
+		supRoot, serr := supervisor.New(ctx, &supervisor.Config{
+			Supervisor: superChat,
+			SubAgents:  subAgents,
+		})
+		if serr != nil {
+			return nil, fmt.Errorf("supervisor.New: %w", serr)
+		}
+		da = supRoot
+	default:
+		dcfg := &deep.Config{
+			Name:                   orchestratorName,
+			Description:            orchDescription,
+			ChatModel:              mainModel,
+			Instruction:            orchInstruction,
+			SubAgents:              subAgents,
+			WithoutGeneralSubAgent: ma.WithoutGeneralSubAgent,
+			WithoutWriteTodos:      ma.WithoutWriteTodos,
+			MaxIteration:           deepMaxIter,
+			Backend:                deepBackend,
+			StreamingShell:         deepShell,
+			Handlers:               deepHandlers,
+			ToolsConfig:            mainToolsCfg,
+		}
+		if deepOutKey != "" {
+			dcfg.OutputKey = deepOutKey
+		}
+		if modelRetry != nil {
+			dcfg.ModelRetryConfig = modelRetry
+		}
+		if taskGen != nil {
+			dcfg.TaskToolDescriptionGenerator = taskGen
+		}
+		dDeep, derr := deep.New(ctx, dcfg)
+		if derr != nil {
+			return nil, fmt.Errorf("deep.New: %w", derr)
+		}
+		da = dDeep
 	}
 
 	baseMsgs := historyToMessages(history)
 	baseMsgs = append(baseMsgs, schema.UserMessage(userMessage))
 
 	streamsMainAssistant := func(agent string) bool {
+		if orchMode == "plan_execute" {
+			return planExecuteStreamsMainAssistant(agent)
+		}
 		return agent == "" || agent == orchestratorName
 	}
 	einoRoleTag := func(agent string) string {
+		if orchMode == "plan_execute" {
+			return planExecuteEinoRoleTag(agent)
+		}
 		if streamsMainAssistant(agent) {
 			return "orchestrator"
 		}
@@ -352,6 +484,8 @@ func RunDeepAgent(
 
 	var lastRunMsgs []adk.Message
 	var lastAssistant string
+	// plan_execute：最后一轮 assistant 常被 replanner 的 JSON 覆盖，单独保留 executor 对用户文本。
+	var lastPlanExecuteExecutor string
 
 	// retryHints tracks the corrective hint to append for each retry attempt.
 	// Index i corresponds to the hint that will be appended on attempt i+1.
@@ -371,6 +505,7 @@ attemptLoop:
 
 		// 仅保留主代理最后一次 assistant 输出；每轮重试重置，避免拼接失败轮次的片段。
 		lastAssistant = ""
+		lastPlanExecuteExecutor = ""
 		var reasoningStreamSeq int64
 		var einoSubReplyStreamSeq int64
 		toolEmitSeen := make(map[string]struct{})
@@ -441,10 +576,25 @@ attemptLoop:
 			pendingQueueByAgent = make(map[string][]string)
 		}
 
-		runner := adk.NewRunner(ctx, adk.RunnerConfig{
+		runnerCfg := adk.RunnerConfig{
 			Agent:           da,
 			EnableStreaming: true,
-		})
+		}
+		if cp := strings.TrimSpace(ma.EinoMiddleware.CheckpointDir); cp != "" {
+			cpDir := filepath.Join(cp, sanitizeEinoPathSegment(conversationID))
+			st, stErr := newFileCheckPointStore(cpDir)
+			if stErr != nil {
+				if logger != nil {
+					logger.Warn("eino checkpoint store disabled", zap.String("dir", cpDir), zap.Error(stErr))
+				}
+			} else {
+				runnerCfg.CheckPointStore = st
+				if logger != nil {
+					logger.Info("eino runner: checkpoint store enabled", zap.String("dir", cpDir))
+				}
+			}
+		}
+		runner := adk.NewRunner(ctx, runnerCfg)
 		iter := runner.Run(ctx, msgs)
 
 		for {
@@ -512,6 +662,12 @@ attemptLoop:
 				return nil, ev.Err
 			}
 			if ev.AgentName != "" && progress != nil {
+				iterEinoAgent := orchestratorName
+				if orchMode == "plan_execute" {
+					if a := strings.TrimSpace(ev.AgentName); a != "" {
+						iterEinoAgent = a
+					}
+				}
 				if streamsMainAssistant(ev.AgentName) {
 					if einoMainRound == 0 {
 						einoMainRound = 1
@@ -519,7 +675,8 @@ attemptLoop:
 							"iteration":      1,
 							"einoScope":      "main",
 							"einoRole":       "orchestrator",
-							"einoAgent":      orchestratorName,
+							"einoAgent":      iterEinoAgent,
+							"orchestration":  orchMode,
 							"conversationId": conversationID,
 							"source":         "eino",
 						})
@@ -529,7 +686,8 @@ attemptLoop:
 							"iteration":      einoMainRound,
 							"einoScope":      "main",
 							"einoRole":       "orchestrator",
-							"einoAgent":      orchestratorName,
+							"einoAgent":      iterEinoAgent,
+							"orchestration":  orchMode,
 							"conversationId": conversationID,
 							"source":         "eino",
 						})
@@ -540,6 +698,7 @@ attemptLoop:
 					"conversationId": conversationID,
 					"einoAgent":      ev.AgentName,
 					"einoRole":       einoRoleTag(ev.AgentName),
+					"orchestration":  orchMode,
 				})
 			}
 			if ev.Output == nil || ev.Output.MessageOutput == nil {
@@ -572,10 +731,11 @@ attemptLoop:
 						if reasoningStreamID == "" {
 							reasoningStreamID = fmt.Sprintf("eino-reasoning-%s-%d", conversationID, atomic.AddInt64(&reasoningStreamSeq, 1))
 							progress("thinking_stream_start", " ", map[string]interface{}{
-								"streamId":  reasoningStreamID,
-								"source":    "eino",
-								"einoAgent": ev.AgentName,
-								"einoRole":  einoRoleTag(ev.AgentName),
+								"streamId":      reasoningStreamID,
+								"source":        "eino",
+								"einoAgent":     ev.AgentName,
+								"einoRole":      einoRoleTag(ev.AgentName),
+								"orchestration": orchMode,
 							})
 						}
 						progress("thinking_stream_delta", chunk.ReasoningContent, map[string]interface{}{
@@ -590,6 +750,8 @@ attemptLoop:
 									"mcpExecutionIds":    snapshotMCPIDs(),
 									"messageGeneratedBy": "eino:" + ev.AgentName,
 									"einoRole":           "orchestrator",
+									"einoAgent":          ev.AgentName,
+									"orchestration":      orchMode,
 								})
 								streamHeaderSent = true
 							}
@@ -597,6 +759,8 @@ attemptLoop:
 								"conversationId":  conversationID,
 								"mcpExecutionIds": snapshotMCPIDs(),
 								"einoRole":        "orchestrator",
+								"einoAgent":       ev.AgentName,
+								"orchestration":   orchMode,
 							})
 							mainAssistantBuf.WriteString(chunk.Content)
 						} else if !streamsMainAssistant(ev.AgentName) {
@@ -627,6 +791,9 @@ attemptLoop:
 				if streamsMainAssistant(ev.AgentName) {
 					if s := strings.TrimSpace(mainAssistantBuf.String()); s != "" {
 						lastAssistant = s
+						if orchMode == "plan_execute" && strings.EqualFold(strings.TrimSpace(ev.AgentName), "executor") {
+							lastPlanExecuteExecutor = UnwrapPlanExecuteUserText(s)
+						}
 					}
 				}
 				if subAssistantBuf.Len() > 0 && progress != nil {
@@ -670,6 +837,7 @@ attemptLoop:
 						"source":         "eino",
 						"einoAgent":      ev.AgentName,
 						"einoRole":       einoRoleTag(ev.AgentName),
+						"orchestration":  orchMode,
 					})
 				}
 				body := strings.TrimSpace(msg.Content)
@@ -681,14 +849,21 @@ attemptLoop:
 								"mcpExecutionIds":    snapshotMCPIDs(),
 								"messageGeneratedBy": "eino:" + ev.AgentName,
 								"einoRole":           "orchestrator",
+								"einoAgent":          ev.AgentName,
+								"orchestration":      orchMode,
 							})
 							progress("response_delta", body, map[string]interface{}{
 								"conversationId":  conversationID,
 								"mcpExecutionIds": snapshotMCPIDs(),
 								"einoRole":        "orchestrator",
+								"einoAgent":       ev.AgentName,
+								"orchestration":   orchMode,
 							})
 						}
 						lastAssistant = body
+						if orchMode == "plan_execute" && strings.EqualFold(strings.TrimSpace(ev.AgentName), "executor") {
+							lastPlanExecuteExecutor = UnwrapPlanExecuteUserText(body)
+						}
 					} else if progress != nil {
 						progress("eino_agent_reply", body, map[string]interface{}{
 							"conversationId": conversationID,
@@ -766,6 +941,13 @@ attemptLoop:
 
 	histJSON, _ := json.Marshal(lastRunMsgs)
 	cleaned := strings.TrimSpace(lastAssistant)
+	if orchMode == "plan_execute" {
+		if e := strings.TrimSpace(lastPlanExecuteExecutor); e != "" {
+			cleaned = e
+		} else {
+			cleaned = UnwrapPlanExecuteUserText(cleaned)
+		}
+	}
 	cleaned = dedupeRepeatedParagraphs(cleaned, 80)
 	cleaned = dedupeParagraphsByLineFingerprint(cleaned, 100)
 	out := &RunResult{
@@ -775,7 +957,7 @@ attemptLoop:
 		LastReActOutput: cleaned,
 	}
 	if out.Response == "" {
-		out.Response = "（Eino DeepAgent 已完成，但未捕获到助手文本输出。请查看过程详情或日志。）"
+		out.Response = "（Eino 多代理编排已完成，但未捕获到助手文本输出。请查看过程详情或日志。）"
 		out.LastReActOutput = out.Response
 	}
 	return out, nil

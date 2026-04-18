@@ -35,20 +35,57 @@ type Config struct {
 	MultiAgent  MultiAgentConfig      `yaml:"multi_agent,omitempty" json:"multi_agent,omitempty"`
 }
 
-// MultiAgentConfig 基于 CloudWeGo Eino DeepAgent 的多代理编排（与单 Agent /agent-loop 并存）。
+// MultiAgentConfig 基于 CloudWeGo Eino adk/prebuilt 的多代理编排（deep | plan_execute | supervisor，与单 Agent /agent-loop 并存）。
 type MultiAgentConfig struct {
-	Enabled                 bool                  `yaml:"enabled" json:"enabled"`
-	DefaultMode             string                `yaml:"default_mode" json:"default_mode"`                   // single | multi，供前端默认展示
-	RobotUseMultiAgent      bool                  `yaml:"robot_use_multi_agent" json:"robot_use_multi_agent"` // 为 true 时钉钉/飞书/企微机器人走 Eino 多代理
-	BatchUseMultiAgent      bool                  `yaml:"batch_use_multi_agent" json:"batch_use_multi_agent"` // 为 true 时批量任务队列中每子任务走 Eino 多代理
-	MaxIteration            int                   `yaml:"max_iteration" json:"max_iteration"`                 // Deep 主代理最大推理轮次
-	SubAgentMaxIterations   int                   `yaml:"sub_agent_max_iterations" json:"sub_agent_max_iterations"`
-	WithoutGeneralSubAgent  bool                  `yaml:"without_general_sub_agent" json:"without_general_sub_agent"`
-	WithoutWriteTodos       bool                  `yaml:"without_write_todos" json:"without_write_todos"`
-	OrchestratorInstruction string                `yaml:"orchestrator_instruction" json:"orchestrator_instruction"`
-	SubAgents               []MultiAgentSubConfig `yaml:"sub_agents" json:"sub_agents"`
+	Enabled            bool   `yaml:"enabled" json:"enabled"`
+	DefaultMode        string `yaml:"default_mode" json:"default_mode"`                   // single | multi，供前端默认展示
+	RobotUseMultiAgent bool   `yaml:"robot_use_multi_agent" json:"robot_use_multi_agent"` // 为 true 时钉钉/飞书/企微机器人走 Eino 多代理
+	BatchUseMultiAgent bool   `yaml:"batch_use_multi_agent" json:"batch_use_multi_agent"` // 为 true 时批量任务队列中每子任务走 Eino 多代理
+	// Orchestration 已弃用：保留仅兼容旧版 config.yaml；编排由聊天/WebShell 请求体 orchestration 决定，未传时按 deep。
+	Orchestration string `yaml:"orchestration,omitempty" json:"orchestration,omitempty"`
+	MaxIteration  int    `yaml:"max_iteration" json:"max_iteration"` // 主代理 / 执行器最大推理轮次（Deep、Supervisor、plan_execute 的 Executor）
+	// PlanExecuteLoopMaxIterations plan_execute 模式下 execute↔replan 外层循环上限；0 表示用 Eino 默认 10。
+	PlanExecuteLoopMaxIterations int                   `yaml:"plan_execute_loop_max_iterations,omitempty" json:"plan_execute_loop_max_iterations,omitempty"`
+	SubAgentMaxIterations        int                   `yaml:"sub_agent_max_iterations" json:"sub_agent_max_iterations"`
+	WithoutGeneralSubAgent       bool                  `yaml:"without_general_sub_agent" json:"without_general_sub_agent"`
+	WithoutWriteTodos            bool                  `yaml:"without_write_todos" json:"without_write_todos"`
+	OrchestratorInstruction      string                `yaml:"orchestrator_instruction" json:"orchestrator_instruction"`
+	// OrchestratorInstructionPlanExecute plan_execute 主代理（规划侧）系统提示；非空且 agents/orchestrator-plan-execute.md 正文为空或未存在时生效。不与 Deep 的 orchestrator_instruction 混用。
+	OrchestratorInstructionPlanExecute string `yaml:"orchestrator_instruction_plan_execute,omitempty" json:"orchestrator_instruction_plan_execute,omitempty"`
+	// OrchestratorInstructionSupervisor supervisor 主代理系统提示（transfer/exit 说明仍由运行追加）；非空且 agents/orchestrator-supervisor.md 正文为空或未存在时生效。
+	OrchestratorInstructionSupervisor string `yaml:"orchestrator_instruction_supervisor,omitempty" json:"orchestrator_instruction_supervisor,omitempty"`
+	SubAgents                    []MultiAgentSubConfig `yaml:"sub_agents" json:"sub_agents"`
 	// EinoSkills configures CloudWeGo Eino ADK skill middleware + optional local filesystem/execute on DeepAgent.
 	EinoSkills MultiAgentEinoSkillsConfig `yaml:"eino_skills,omitempty" json:"eino_skills,omitempty"`
+	// EinoMiddleware wires optional ADK middleware (patchtoolcalls, toolsearch, plantask, reduction) and Deep extras.
+	EinoMiddleware MultiAgentEinoMiddlewareConfig `yaml:"eino_middleware,omitempty" json:"eino_middleware,omitempty"`
+}
+
+// MultiAgentEinoMiddlewareConfig optional Eino ADK middleware and Deep / supervisor tuning.
+type MultiAgentEinoMiddlewareConfig struct {
+	// PatchToolCalls inserts placeholder tool results for dangling assistant tool_calls (nil = enabled).
+	PatchToolCalls *bool `yaml:"patch_tool_calls,omitempty" json:"patch_tool_calls,omitempty"`
+	// ToolSearch enables dynamictool/toolsearch: hide tail tools until model calls tool_search (reduces prompt tools).
+	ToolSearchEnable        bool `yaml:"tool_search_enable,omitempty" json:"tool_search_enable,omitempty"`
+	ToolSearchMinTools      int  `yaml:"tool_search_min_tools,omitempty" json:"tool_search_min_tools,omitempty"`           // default 20; applies when len(tools) >= this
+	ToolSearchAlwaysVisible int  `yaml:"tool_search_always_visible,omitempty" json:"tool_search_always_visible,omitempty"` // default 12; first N tools stay always visible
+	// Plantask adds TaskCreate/Get/Update/List (file-backed under skills dir); requires eino_skills + local backend.
+	PlantaskEnable bool `yaml:"plantask_enable,omitempty" json:"plantask_enable,omitempty"`
+	// PlantaskRelDir relative to skills_dir for per-conversation task boards (default .eino/plantask).
+	PlantaskRelDir string `yaml:"plantask_rel_dir,omitempty" json:"plantask_rel_dir,omitempty"`
+	// Reduction truncates/offloads large tool outputs (requires eino local backend for Write).
+	ReductionEnable           bool     `yaml:"reduction_enable,omitempty" json:"reduction_enable,omitempty"`
+	ReductionRootDir          string   `yaml:"reduction_root_dir,omitempty" json:"reduction_root_dir,omitempty"` // default: os temp + conversation id
+	ReductionClearExclude     []string `yaml:"reduction_clear_exclude,omitempty" json:"reduction_clear_exclude,omitempty"`
+	ReductionSubAgents        bool     `yaml:"reduction_sub_agents,omitempty" json:"reduction_sub_agents,omitempty"` // also attach to sub-agents
+	// CheckpointDir when non-empty enables adk.Runner CheckPointStore (file-backed) for interrupt/resume persistence.
+	CheckpointDir string `yaml:"checkpoint_dir,omitempty" json:"checkpoint_dir,omitempty"`
+	// DeepOutputKey passed to deep.Config OutputKey (session final text); empty = off.
+	DeepOutputKey string `yaml:"deep_output_key,omitempty" json:"deep_output_key,omitempty"`
+	// DeepModelRetryMaxRetries > 0 enables deep.Config ModelRetryConfig (framework-level chat model retries).
+	DeepModelRetryMaxRetries int `yaml:"deep_model_retry_max_retries,omitempty" json:"deep_model_retry_max_retries,omitempty"`
+	// TaskToolDescriptionPrefix when non-empty sets deep.Config TaskToolDescriptionGenerator (sub-agent names appended).
+	TaskToolDescriptionPrefix string `yaml:"task_tool_description_prefix,omitempty" json:"task_tool_description_prefix,omitempty"`
 }
 
 // MultiAgentEinoSkillsConfig toggles Eino official skill progressive disclosure and host filesystem tools.
@@ -69,7 +106,15 @@ func (c MultiAgentEinoSkillsConfig) EinoSkillFilesystemToolsEffective() bool {
 	return true
 }
 
-// MultiAgentSubConfig 子代理（Eino ChatModelAgent），由 DeepAgent 通过 task 工具调度。
+// PatchToolCallsEffective returns whether patchtoolcalls middleware should run (default true).
+func (c MultiAgentEinoMiddlewareConfig) PatchToolCallsEffective() bool {
+	if c.PatchToolCalls != nil {
+		return *c.PatchToolCalls
+	}
+	return true
+}
+
+// MultiAgentSubConfig 子代理（Eino ChatModelAgent）：deep 下由 task 调度；supervisor 下由 transfer 委派；plan_execute 不使用子代理列表。
 type MultiAgentSubConfig struct {
 	ID            string   `yaml:"id" json:"id"`
 	Name          string   `yaml:"name" json:"name"`
@@ -83,19 +128,35 @@ type MultiAgentSubConfig struct {
 
 // MultiAgentPublic 返回给前端的精简信息（不含子代理指令全文）。
 type MultiAgentPublic struct {
-	Enabled            bool   `json:"enabled"`
-	DefaultMode        string `json:"default_mode"`
-	RobotUseMultiAgent bool   `json:"robot_use_multi_agent"`
-	BatchUseMultiAgent bool   `json:"batch_use_multi_agent"`
-	SubAgentCount      int    `json:"sub_agent_count"`
+	Enabled                      bool   `json:"enabled"`
+	DefaultMode                  string `json:"default_mode"`
+	RobotUseMultiAgent           bool   `json:"robot_use_multi_agent"`
+	BatchUseMultiAgent           bool   `json:"batch_use_multi_agent"`
+	SubAgentCount                int    `json:"sub_agent_count"`
+	Orchestration                string `json:"orchestration,omitempty"`
+	PlanExecuteLoopMaxIterations int    `json:"plan_execute_loop_max_iterations"`
+}
+
+// NormalizeMultiAgentOrchestration 返回 deep、plan_execute 或 supervisor。
+func NormalizeMultiAgentOrchestration(s string) string {
+	v := strings.TrimSpace(strings.ToLower(s))
+	switch v {
+	case "plan_execute", "plan-execute", "planexecute", "pe":
+		return "plan_execute"
+	case "supervisor", "super", "sv":
+		return "supervisor"
+	default:
+		return "deep"
+	}
 }
 
 // MultiAgentAPIUpdate 设置页/API 仅更新多代理标量字段；写入 YAML 时不覆盖 sub_agents 等块。
 type MultiAgentAPIUpdate struct {
-	Enabled            bool   `json:"enabled"`
-	DefaultMode        string `json:"default_mode"`
-	RobotUseMultiAgent bool   `json:"robot_use_multi_agent"`
-	BatchUseMultiAgent bool   `json:"batch_use_multi_agent"`
+	Enabled                      bool   `json:"enabled"`
+	DefaultMode                  string `json:"default_mode"`
+	RobotUseMultiAgent           bool   `json:"robot_use_multi_agent"`
+	BatchUseMultiAgent           bool   `json:"batch_use_multi_agent"`
+	PlanExecuteLoopMaxIterations *int   `json:"plan_execute_loop_max_iterations,omitempty"`
 }
 
 // RobotsConfig 机器人配置（企业微信、钉钉、飞书等）
@@ -179,6 +240,8 @@ type AgentConfig struct {
 	LargeResultThreshold int    `yaml:"large_result_threshold" json:"large_result_threshold"` // 大结果阈值（字节），默认50KB
 	ResultStorageDir     string `yaml:"result_storage_dir" json:"result_storage_dir"`         // 结果存储目录，默认tmp
 	ToolTimeoutMinutes   int    `yaml:"tool_timeout_minutes" json:"tool_timeout_minutes"`     // 单次工具执行最大时长（分钟），超时自动终止，防止长时间挂起；0 表示不限制（不推荐）
+	// SystemPromptPath 单代理系统提示 Markdown/文本文件路径（相对 config.yaml 所在目录，或可写绝对路径）。非空且可读时替换内置单代理提示；留空用内置。
+	SystemPromptPath string `yaml:"system_prompt_path,omitempty" json:"system_prompt_path,omitempty"`
 }
 
 type AuthConfig struct {
@@ -776,18 +839,18 @@ func Default() *Config {
 				SimilarityThreshold: 0.65, // 降低阈值到 0.65，减少漏检
 			},
 			Indexing: IndexingConfig{
-				ChunkStrategy:            "markdown_then_recursive",
-				RequestTimeoutSeconds:    120,
-				ChunkSize:                768, // 增加到 768，更好的上下文保持
-				ChunkOverlap:             50,
-				MaxChunksPerItem:         20, // 限制单个知识项最多 20 个块，避免消耗过多配额
-				BatchSize:                64,
-				PreferSourceFile:         false,
-				MaxRPM:                   100, // 默认 100 RPM，避免 429 错误
-				RateLimitDelayMs:         600, // 600ms 间隔，对应 100 RPM
-				MaxRetries:               3,
-				RetryDelayMs:             1000,
-				SubIndexes:               nil,
+				ChunkStrategy:         "markdown_then_recursive",
+				RequestTimeoutSeconds: 120,
+				ChunkSize:             768, // 增加到 768，更好的上下文保持
+				ChunkOverlap:          50,
+				MaxChunksPerItem:      20, // 限制单个知识项最多 20 个块，避免消耗过多配额
+				BatchSize:             64,
+				PreferSourceFile:      false,
+				MaxRPM:                100, // 默认 100 RPM，避免 429 错误
+				RateLimitDelayMs:      600, // 600ms 间隔，对应 100 RPM
+				MaxRetries:            3,
+				RetryDelayMs:          1000,
+				SubIndexes:            nil,
 			},
 		},
 	}

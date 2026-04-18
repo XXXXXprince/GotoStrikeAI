@@ -18,36 +18,37 @@ import (
 
 // prepareEinoSkills builds Eino official skill backend + middleware, and a shared local disk backend
 // for skill discovery and (optionally) filesystem/execute tools. Returns nils when disabled or dir missing.
+// skillsRoot is the absolute skills directory (empty when skills are not active).
 func prepareEinoSkills(
 	ctx context.Context,
 	skillsDir string,
 	ma *config.MultiAgentConfig,
 	logger *zap.Logger,
-) (loc *localbk.Local, skillMW adk.ChatModelAgentMiddleware, fsTools bool, err error) {
+) (loc *localbk.Local, skillMW adk.ChatModelAgentMiddleware, fsTools bool, skillsRoot string, err error) {
 	if ma == nil || ma.EinoSkills.Disable {
-		return nil, nil, false, nil
+		return nil, nil, false, "", nil
 	}
 	root := strings.TrimSpace(skillsDir)
 	if root == "" {
 		if logger != nil {
 			logger.Warn("eino skills: skills_dir empty, skip")
 		}
-		return nil, nil, false, nil
+		return nil, nil, false, "", nil
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("skills_dir abs: %w", err)
+		return nil, nil, false, "", fmt.Errorf("skills_dir abs: %w", err)
 	}
 	if st, err := os.Stat(abs); err != nil || !st.IsDir() {
 		if logger != nil {
 			logger.Warn("eino skills: directory missing, skip", zap.String("dir", abs), zap.Error(err))
 		}
-		return nil, nil, false, nil
+		return nil, nil, false, "", nil
 	}
 
 	loc, err = localbk.NewBackend(ctx, &localbk.Config{})
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("eino local backend: %w", err)
+		return nil, nil, false, "", fmt.Errorf("eino local backend: %w", err)
 	}
 
 	skillBE, err := skill.NewBackendFromFilesystem(ctx, &skill.BackendFromFilesystemConfig{
@@ -55,7 +56,7 @@ func prepareEinoSkills(
 		BaseDir: abs,
 	})
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("eino skill filesystem backend: %w", err)
+		return nil, nil, false, "", fmt.Errorf("eino skill filesystem backend: %w", err)
 	}
 
 	sc := &skill.Config{Backend: skillBE}
@@ -64,11 +65,11 @@ func prepareEinoSkills(
 	}
 	skillMW, err = skill.NewMiddleware(ctx, sc)
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("eino skill middleware: %w", err)
+		return nil, nil, false, "", fmt.Errorf("eino skill middleware: %w", err)
 	}
 
 	fsTools = ma.EinoSkills.EinoSkillFilesystemToolsEffective()
-	return loc, skillMW, fsTools, nil
+	return loc, skillMW, fsTools, abs, nil
 }
 
 // subAgentFilesystemMiddleware returns filesystem middleware for a sub-agent when Deep itself
